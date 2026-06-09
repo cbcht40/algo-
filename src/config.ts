@@ -1,0 +1,112 @@
+import { readFileSync } from "node:fs";
+import type { Environment } from "./tradovate/types";
+
+export interface AuthConfig {
+  /** "token" = reuse a web-session token (works on prop-firm Eval accounts). */
+  /** "apikey" = mint a token from credentials + an API key (needs API Access). */
+  mode: "token" | "apikey";
+  /** Token mode: default access token shared by all accounts under one login. */
+  accessToken?: string;
+  /** Optional host overrides if your web session talks to a non-default host. */
+  restBase?: string;
+  wsUrl?: string;
+}
+
+export interface AccountConfig {
+  label: string;
+  /** Account name as shown in Tradovate (the order "accountSpec"). */
+  accountSpec?: string;
+  /** Numeric account id. */
+  accountId?: number;
+  /** Token mode: per-account token override (for accounts on a different login). */
+  accessToken?: string;
+  /** API-key mode credentials. */
+  name?: string;
+  password?: string;
+  cid?: number;
+  sec?: string;
+}
+
+export interface FollowerConfig extends AccountConfig {
+  /** Quantity multiplier vs the master order (e.g. 2 => double size). Default 1. */
+  multiplier?: number;
+  /** Optional per-follower symbol remap, e.g. { "MESU6": "ESU6" }. */
+  symbolMap?: Record<string, string>;
+}
+
+export interface Config {
+  environment: Environment;
+  appId: string;
+  appVersion: string;
+  /** When true, log intended follower orders but never actually send them. */
+  dryRun: boolean;
+  auth: AuthConfig;
+  master: AccountConfig;
+  followers: FollowerConfig[];
+}
+
+export function loadConfig(path: string): Config {
+  let raw: string;
+  try {
+    raw = readFileSync(path, "utf8");
+  } catch {
+    throw new Error(
+      `Could not read config at "${path}". Copy config.example.json to config.json and fill it in.`,
+    );
+  }
+
+  const c = JSON.parse(raw) as Partial<Config>;
+  const env = (c.environment ?? "demo") as Environment;
+  if (env !== "demo" && env !== "live") {
+    throw new Error(`environment must be "demo" or "live" (got "${env}").`);
+  }
+
+  const auth = c.auth;
+  if (!auth || (auth.mode !== "token" && auth.mode !== "apikey")) {
+    throw new Error('config.auth.mode must be "token" or "apikey".');
+  }
+  if (auth.mode === "token" && !auth.accessToken) {
+    // A per-account token is still allowed, but a shared one is the common case.
+    const anyAccountHasToken =
+      c.master?.accessToken || (c.followers ?? []).some((f) => f?.accessToken);
+    if (!anyAccountHasToken) {
+      throw new Error(
+        "Token mode needs auth.accessToken (paste the token from your logged-in Tradovate web session).",
+      );
+    }
+  }
+
+  const checkAccount = (a: AccountConfig | undefined, where: string): AccountConfig => {
+    if (!a) throw new Error(`Missing ${where} in config.`);
+    if (!a.label) throw new Error(`Missing ${where}.label.`);
+    if (auth.mode === "apikey") {
+      if (!a.name) throw new Error(`Missing ${where}.name (login) for apikey mode.`);
+      if (!a.password) throw new Error(`Missing ${where}.password for apikey mode.`);
+      if (!a.cid) throw new Error(`Missing ${where}.cid (API key client id) for apikey mode.`);
+      if (!a.sec) throw new Error(`Missing ${where}.sec (API key secret) for apikey mode.`);
+    } else {
+      // Token mode: must be able to point at the right account under the login.
+      if (!a.accountId && !a.accountSpec) {
+        throw new Error(`Set ${where}.accountSpec or ${where}.accountId (token mode).`);
+      }
+    }
+    return a;
+  };
+
+  const master = checkAccount(c.master, "master");
+  const followers = (c.followers ?? []).map((f, i) => {
+    checkAccount(f, `followers[${i}]`);
+    return { multiplier: 1, symbolMap: {}, ...f } as FollowerConfig;
+  });
+  if (followers.length === 0) throw new Error("No followers configured.");
+
+  return {
+    environment: env,
+    appId: c.appId ?? "MacCopier",
+    appVersion: c.appVersion ?? "0.1",
+    dryRun: c.dryRun ?? true,
+    auth,
+    master,
+    followers,
+  };
+}

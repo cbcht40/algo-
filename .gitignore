@@ -1,0 +1,20 @@
+node_modules/
+dist/
+
+# Local config holds API keys & passwords — never commit it.
+config.json
+config.*.json
+!config.example.json
+
+# Secrets / env
+.env
+.env.*
+!.env.example
+
+# Device id cache & logs
+.tradovate-devices.json
+*.log
+logs/
+
+# OS
+.DS_Store
