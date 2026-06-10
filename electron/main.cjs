@@ -11,6 +11,10 @@ const ROOT = path.join(__dirname, '..')
 const PORT = Number(process.env.DASHBOARD_PORT) || 7879
 const DASH_URL = `http://127.0.0.1:${PORT}`
 
+// Pin the app name so the user-data dir is stable + branded (otherwise Electron
+// derives it from the package "name", e.g. "tradovate-copier").
+app.setName('Copieur Tradovate')
+
 // Packaged: config + caches live in the writable user-data dir (the app bundle is
 // read-only). Dev: they live in the project root.
 const dataDir = () => (app.isPackaged ? app.getPath('userData') : ROOT)
