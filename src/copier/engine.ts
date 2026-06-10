@@ -52,23 +52,28 @@ export class CopierEngine {
   // login share the connection.
   private getClient(acct: AccountConfig): TradovateClient {
     const auth = this.cfg.auth;
+    // A login can sit on a different network than the global one (e.g. funded
+    // accounts on "live" while the master eval is on "demo"). Per-account host
+    // overrides only apply when the account rides the global network.
+    const environment = acct.environment ?? this.cfg.environment;
+    const usingGlobalEnv = acct.environment === undefined;
     const common = {
       label: acct.label,
-      environment: this.cfg.environment,
+      environment,
       appId: this.cfg.appId,
       appVersion: this.cfg.appVersion,
-      restBase: auth.restBase,
-      wsUrl: auth.wsUrl,
+      restBase: usingGlobalEnv ? auth.restBase : undefined,
+      wsUrl: usingGlobalEnv ? auth.wsUrl : undefined,
     };
 
     let key: string;
     let opts: ClientOptions;
     if (auth.mode === "token") {
       const token = acct.accessToken ?? auth.accessToken!;
-      key = `token|${token.slice(0, 24)}`;
+      key = `token|${environment}|${token.slice(0, 24)}`;
       opts = { ...common, accessToken: token };
     } else {
-      key = `apikey|${acct.name}|${acct.cid}`;
+      key = `apikey|${environment}|${acct.name}|${acct.cid}`;
       opts = { ...common, name: acct.name, password: acct.password, cid: acct.cid, sec: acct.sec };
     }
 

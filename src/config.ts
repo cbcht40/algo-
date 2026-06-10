@@ -18,6 +18,9 @@ export interface AccountConfig {
   accountSpec?: string;
   /** Numeric account id. */
   accountId?: number;
+  /** Per-account network override (e.g. a funded login on "live" while the
+   *  master is on "demo"). Defaults to the global `environment`. */
+  environment?: Environment;
   /** Token mode: per-account token override (for accounts on a different login). */
   accessToken?: string;
   /** API-key mode credentials. */
@@ -79,6 +82,9 @@ export function loadConfig(path: string): Config {
   const checkAccount = (a: AccountConfig | undefined, where: string): AccountConfig => {
     if (!a) throw new Error(`Missing ${where} in config.`);
     if (!a.label) throw new Error(`Missing ${where}.label.`);
+    if (a.environment && a.environment !== "demo" && a.environment !== "live") {
+      throw new Error(`${where}.environment must be "demo" or "live" (got "${a.environment}").`);
+    }
     if (auth.mode === "apikey") {
       if (!a.name) throw new Error(`Missing ${where}.name (login) for apikey mode.`);
       if (!a.password) throw new Error(`Missing ${where}.password for apikey mode.`);
