@@ -71,9 +71,10 @@
       <button class="primary" onclick="openExt()">📦 Installer l'extension</button>
       <div class="hint" id="extHint" style="display:none; margin-top:12px; line-height:1.8">
         Le dossier de l'extension vient de s'ouvrir. Dans Chrome :<br>
-        ① va sur <b>chrome://extensions</b> &nbsp; ② active <b>« Mode développeur »</b> (en haut à droite) &nbsp; ③ clique <b>« Charger l'extension non empaquetée »</b> et choisis ce dossier.
+        ① va sur <b>chrome://extensions</b> &nbsp; ② active <b>« Mode développeur »</b> (en haut à droite) &nbsp; ③ clique <b>« Charger l'extension non empaquetée »</b> et choisis ce dossier.<br>
+        ④ <b>Rafraîchis ton onglet Tradovate</b> (Cmd+R) → tes comptes remontent juste en dessous.
       </div>
-      <div class="msg wait" id="s2msg" style="margin-top:14px"><span class="spin"></span>En attente de tes comptes…</div>
+      <div class="msg wait" id="s2msg" style="margin-top:14px"><span class="spin"></span>En attente de tes comptes… <span style="color:var(--txt3)">— rien ne vient ? rafraîchis ton onglet Tradovate (Cmd+R)</span></div>
       <div class="accts" id="accts"></div>
     </div>
 
@@ -136,9 +137,21 @@
     try {
       const r = await fetch('/api/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ masterSpec: master, dryRun: $('dry').checked }) });
       const d = await r.json();
-      if (d.ok) { $('s3msg').className = 'msg ok'; $('s3msg').textContent = '✓ C\'est parti — le copieur démarre, la fenêtre va se recharger…'; }
+      if (d.ok) { $('s3msg').className = 'msg ok'; $('s3msg').innerHTML = '<span class="spin"></span>C\'est parti — le copieur démarre, la fenêtre va se recharger automatiquement…'; waitForCopier(); }
       else { $('s3msg').className = 'msg err'; $('s3msg').textContent = '✗ ' + (d.error || 'erreur'); $('saveBtn').disabled = false; }
     } catch { $('s3msg').className = 'msg err'; $('s3msg').textContent = 'Serveur injoignable.'; $('saveBtn').disabled = false; }
+  }
+
+  // After save, the setup server exits and the copier comes up on the same port
+  // (Electron restarts it; in dev, after a fresh `npm start`). Reload once it's live.
+  async function waitForCopier() {
+    for (let i = 0; i < 200; i++) {
+      await new Promise(r => setTimeout(r, 1500));
+      try {
+        const d = await (await fetch('/api/state', { cache: 'no-store' })).json();
+        if (d && !d.setup) { location.reload(); return; }
+      } catch (_) { /* server restarting */ }
+    }
   }
 
   async function poll() {
