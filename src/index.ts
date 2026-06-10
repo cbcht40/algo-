@@ -6,6 +6,7 @@ import { CopierEngine } from "./copier/engine";
 import { startBridge } from "./bridge";
 import { startDashboard } from "./dashboard";
 import { LicenseGate } from "./license";
+import { startJournalSync } from "./journalSync";
 import { logger, setLogLevel } from "./logger";
 
 const log = logger("main");
@@ -68,6 +69,10 @@ async function main() {
   await gate.start(cfg.license || process.env.COPIER_LICENSE);
 
   await engine.start();
+
+  // Auto-journal: push the trades the Copieur observes straight into the user's
+  // Let-Trade Journal (Edge). No token leaves the machine — only the trades.
+  startJournalSync(engine, cfg.license || process.env.COPIER_LICENSE || "");
 }
 
 main().catch((err) => {

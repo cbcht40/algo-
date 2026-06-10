@@ -108,6 +108,18 @@ export class TradovateClient {
     this.statusHandlers.add(h);
   }
 
+  /** Authenticated REST GET against this login's host, using the live (renewed)
+   *  token. Used by the journal-sync agent to pull fills. */
+  async restGet(path: string): Promise<unknown> {
+    const token = this.token?.accessToken;
+    if (!token) throw new Error(`[${this.label}] non authentifié`);
+    const r = await fetch(`${this.restBase}${path}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) throw new Error(`[${this.label}] REST ${path} → HTTP ${r.status}`);
+    return r.json();
+  }
+
   /** Authenticate over REST, open the websocket, authorize it, then sync. */
   async start(): Promise<void> {
     await this.authenticate();

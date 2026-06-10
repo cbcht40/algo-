@@ -96,6 +96,12 @@ export class CopierEngine {
     return this.active;
   }
 
+  /** Live clients (one per login) with their fresh tokens — used by the journal
+   *  sync agent to pull fills. */
+  allClients(): TradovateClient[] {
+    return [...this.clients.values()];
+  }
+
   /** Choose which account is the master. Persisted; applied on the next restart
    *  (the Electron app restarts the copier automatically when this changes). */
   requestMaster(spec: string): { ok: boolean; error?: string; masterSpec?: string } {
