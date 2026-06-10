@@ -21,8 +21,8 @@
     "build": "tsc",
     "app": "electron electron/main.cjs",
     "bundle": "node scripts/bundle.mjs",
-    "dist": "npm run bundle && electron-builder --mac",
-    "dist:win": "npm run bundle && electron-builder --win"
+    "dist": "npm run bundle && electron-builder --mac --publish never",
+    "dist:win": "npm run bundle && electron-builder --win --publish never"
   },
   "dependencies": {
     "ws": "^8.18.0"
