@@ -2,11 +2,17 @@ import { readFileSync } from "node:fs";
 import type { Environment } from "./tradovate/types";
 
 export interface AuthConfig {
+  /** "credentials" = username+password per login; tokens are minted & renewed
+   *  automatically (set-and-forget — no API key, no token pasting). */
   /** "token" = reuse a web-session token (works on prop-firm Eval accounts). */
   /** "apikey" = mint a token from credentials + an API key (needs API Access). */
-  mode: "token" | "apikey";
+  mode: "token" | "apikey" | "credentials";
   /** Token mode: default access token shared by all accounts under one login. */
   accessToken?: string;
+  /** Credentials mode: optional API-key override (defaults to Tradovate's
+   *  public sample pair, which works for username+password logins). */
+  cid?: number;
+  sec?: string;
   /** Optional host overrides if your web session talks to a non-default host. */
   restBase?: string;
   wsUrl?: string;
@@ -65,8 +71,8 @@ export function loadConfig(path: string): Config {
   }
 
   const auth = c.auth;
-  if (!auth || (auth.mode !== "token" && auth.mode !== "apikey")) {
-    throw new Error('config.auth.mode must be "token" or "apikey".');
+  if (!auth || !["token", "apikey", "credentials"].includes(auth.mode)) {
+    throw new Error('config.auth.mode must be "token", "apikey" or "credentials".');
   }
   if (auth.mode === "token" && !auth.accessToken) {
     // A per-account token is still allowed, but a shared one is the common case.
@@ -91,9 +97,16 @@ export function loadConfig(path: string): Config {
       if (!a.cid) throw new Error(`Missing ${where}.cid (API key client id) for apikey mode.`);
       if (!a.sec) throw new Error(`Missing ${where}.sec (API key secret) for apikey mode.`);
     } else {
-      // Token mode: must be able to point at the right account under the login.
+      if (auth.mode === "credentials") {
+        // Each account needs a way in: its login's username+password, or a
+        // pasted token as a per-account fallback.
+        if (!a.accessToken && !(a.name && a.password)) {
+          throw new Error(`${where}: set name+password (or an accessToken fallback).`);
+        }
+      }
+      // Must be able to point at the right account under the login.
       if (!a.accountId && !a.accountSpec) {
-        throw new Error(`Set ${where}.accountSpec or ${where}.accountId (token mode).`);
+        throw new Error(`Set ${where}.accountSpec or ${where}.accountId.`);
       }
     }
     return a;

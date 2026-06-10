@@ -11,8 +11,9 @@ config.*.json
 .env.*
 !.env.example
 
-# Device id cache & logs
+# Device id / token caches & logs
 .tradovate-devices.json
+.tradovate-tokens.json
 *.log
 logs/
 

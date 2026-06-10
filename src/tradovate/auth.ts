@@ -11,6 +11,13 @@ export const WS_URL: Record<Environment, string> = {
   live: "wss://live.tradovateapi.com/v1/websocket",
 };
 
+// Tradovate's public sample API-key pair (from their official examples). Lets
+// "credentials mode" mint tokens from plain username+password without the user
+// owning an API key (eval/prop accounts can't get one). Override with
+// auth.cid/auth.sec in config if Tradovate ever rejects it.
+export const PUBLIC_CID = 8;
+export const PUBLIC_SEC = "f03741b6-f634-48d6-9308-c8fb871150c2";
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /**

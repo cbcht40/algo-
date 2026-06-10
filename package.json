@@ -9,6 +9,12 @@
   "scripts": {
     "start": "tsx src/index.ts",
     "dev": "tsx watch src/index.ts",
+    "setup": "tsx tools/setup.ts",
+    "service:install": "bash tools/service.sh install",
+    "service:uninstall": "bash tools/service.sh uninstall",
+    "service:status": "bash tools/service.sh status",
+    "service:logs": "bash tools/service.sh logs",
+    "service:restart": "bash tools/service.sh restart",
     "typecheck": "tsc --noEmit",
     "build": "tsc"
   },

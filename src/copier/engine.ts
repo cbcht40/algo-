@@ -68,15 +68,25 @@ export class CopierEngine {
 
     let key: string;
     let opts: ClientOptions;
-    if (auth.mode === "token") {
-      const token = acct.accessToken ?? auth.accessToken!;
+    const pastedToken = acct.accessToken ?? (auth.mode === "token" ? auth.accessToken : undefined);
+    if (pastedToken) {
       // Key on the FULL token: JWTs from the same issuer share an identical
       // header prefix, so a sliced key would collapse distinct logins into one.
-      key = `token|${environment}|${token}`;
-      opts = { ...common, accessToken: token };
+      key = `token|${environment}|${pastedToken}`;
+      opts = { ...common, accessToken: pastedToken };
+    } else if (acct.name && acct.password) {
+      // credentials / apikey: one client per username (cid/sec default to the
+      // public pair inside the client when not provided).
+      key = `cred|${environment}|${acct.name}`;
+      opts = {
+        ...common,
+        name: acct.name,
+        password: acct.password,
+        cid: acct.cid ?? auth.cid,
+        sec: acct.sec ?? auth.sec,
+      };
     } else {
-      key = `apikey|${environment}|${acct.name}|${acct.cid}`;
-      opts = { ...common, name: acct.name, password: acct.password, cid: acct.cid, sec: acct.sec };
+      throw new Error(`[${acct.label}] no credentials: set accessToken or name+password.`);
     }
 
     let c = this.clients.get(key);

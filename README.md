@@ -12,6 +12,22 @@ persistant → latence minimale).
 
 ---
 
+## 0. Mode autonome (recommandé) — calibre une fois, tourne tout seul
+
+```bash
+npm run setup              # email + mot de passe par firme, choix du maître
+npm start                  # test au premier plan…
+npm run service:install    # …ou service 24/7 : démarre au boot, relance auto
+```
+
+- **Plus aucun token à coller** : le copieur se connecte par identifiants,
+  fabrique et **renouvelle ses tokens tout seul** (cache disque
+  `.tradovate-tokens.json`, gitignored).
+- **Service macOS (launchd)** : démarre à l'allumage du Mac, se relance en cas
+  de crash, logue dans `logs/copier.log` (`npm run service:logs`).
+- Si une firme refuse le login direct (captcha…), l'assistant accepte un
+  **token de session en secours** pour cette firme uniquement.
+
 ## 1. Deux modes de connexion
 
 Tradovate exige un compte **LIVE + >5000 $ + abonnement API Access** pour générer une

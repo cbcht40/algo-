@@ -4,9 +4,12 @@ import {
   acquireAccessToken,
   deviceIdFor,
   renewAccessToken,
+  PUBLIC_CID,
+  PUBLIC_SEC,
   REST_BASE,
   WS_URL,
 } from "./auth";
+import { getStoredToken, jwtClaims, storeToken } from "./tokenStore";
 import {
   buildRequestFrame,
   HEARTBEAT_FRAME,
@@ -106,27 +109,70 @@ export class TradovateClient {
     await this.connectSocket();
   }
 
+  /** Stable key for the on-disk token cache (per login per network). */
+  private cacheKey(): string {
+    if (this.opts.name) return `cred|${this.env}|${this.opts.name}`;
+    const sub = jwtClaims(this.opts.accessToken ?? "").sub ?? "unknown";
+    return `tok|${this.env}|${sub}`;
+  }
+
+  private saveToken(): void {
+    if (this.token) storeToken(this.cacheKey(), this.token);
+  }
+
   private async authenticate(): Promise<void> {
+    const cached = getStoredToken(this.cacheKey());
+
     if (this.opts.accessToken !== undefined) {
-      // Token mode: renew the (web-session) token to validate it and learn the
-      // userId + expiry. Renew from the freshest token we hold.
-      const seed = this.token?.accessToken ?? this.opts.accessToken;
+      // Token mode: renew to validate + learn userId/expiry. Seed from the
+      // freshest token we hold: in-memory > cached-on-disk > the config paste.
+      const seeds = [this.token?.accessToken, cached?.accessToken, this.opts.accessToken]
+        .filter((s): s is string => !!s)
+        .sort((a, b) => (jwtClaims(b).exp ?? 0) - (jwtClaims(a).exp ?? 0));
       this.log.info("Validating session token…");
-      this.token = await renewAccessToken(this.restBase, seed);
+      let lastErr: unknown;
+      for (const seed of seeds) {
+        try {
+          this.token = await renewAccessToken(this.restBase, seed);
+          lastErr = undefined;
+          break;
+        } catch (err) {
+          lastErr = err;
+        }
+      }
+      if (lastErr) throw lastErr;
+    } else if (this.opts.name && this.opts.password) {
+      // Credentials mode: resume the cached session when possible, otherwise
+      // log in from scratch (public sample API key unless overridden).
+      if (cached) {
+        try {
+          this.token = await renewAccessToken(this.restBase, cached.accessToken);
+        } catch {
+          this.log.debug("Cached token stale — logging in with credentials.");
+        }
+      }
+      if (!this.token?.accessToken) {
+        this.log.info("Logging in with credentials…");
+        this.token = await acquireAccessToken(this.restBase, {
+          name: this.opts.name,
+          password: this.opts.password,
+          appId: this.opts.appId,
+          appVersion: this.opts.appVersion,
+          cid: this.opts.cid ?? PUBLIC_CID,
+          sec: this.opts.sec ?? PUBLIC_SEC,
+          deviceId: deviceIdFor(this.opts.name),
+        });
+      }
     } else {
-      const deviceId = deviceIdFor(this.opts.name ?? this.opts.label);
-      this.log.info("Authenticating with API key…");
-      this.token = await acquireAccessToken(this.restBase, {
-        name: this.opts.name!,
-        password: this.opts.password!,
-        appId: this.opts.appId,
-        appVersion: this.opts.appVersion,
-        cid: this.opts.cid!,
-        sec: this.opts.sec!,
-        deviceId,
-      });
+      throw new Error(
+        `[${this.label}] No way to authenticate: need accessToken or name+password.`,
+      );
+    }
+    if (!this.token?.accessToken) {
+      throw new Error(`[${this.label}] Authentication produced no token.`);
     }
     this.userId = this.token.userId;
+    this.saveToken();
     this.scheduleRenewal();
     this.log.info(`Authenticated as userId=${this.userId}.`);
   }
@@ -140,10 +186,16 @@ export class TradovateClient {
     this.renewTimer = setTimeout(async () => {
       try {
         this.token = await renewAccessToken(this.restBase, this.token!.accessToken);
+        this.saveToken();
         this.log.debug("Access token renewed.");
         this.scheduleRenewal();
       } catch (err) {
-        this.log.warn(`Token renewal failed, will re-auth on next reconnect: ${String(err)}`);
+        this.log.warn(`Token renewal failed: ${String(err)} — re-authenticating…`);
+        try {
+          await this.authenticate();
+        } catch (err2) {
+          this.log.warn(`Re-auth failed, will retry on next reconnect: ${String(err2)}`);
+        }
       }
     }, delay);
   }
