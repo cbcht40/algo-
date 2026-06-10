@@ -1,0 +1,252 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Copieur Tradovate — Tableau de bord</title>
+<style>
+  :root {
+    --bg:#0a0a10; --card:#14141d; --card2:#1a1a25; --border:#26263a;
+    --txt:#ececf4; --txt2:#9494aa; --txt3:#5a5a70;
+    --green:#34d399; --red:#fb7185; --amber:#fbbf24; --accent:#6c63ff;
+    --mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body {
+    background:var(--bg); color:var(--txt); min-height:100vh;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-size:15px;
+    padding:24px; -webkit-font-smoothing:antialiased;
+  }
+  .wrap { max-width:920px; margin:0 auto; }
+
+  header { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:6px; }
+  h1 { font-size:20px; font-weight:800; letter-spacing:-.3px; }
+  h1 .dot-live { width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:8px; vertical-align:middle; }
+  .badge { font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:3px 9px; border-radius:6px; border:1px solid var(--border); color:var(--txt2); }
+  .badge.live { color:var(--red); border-color:rgba(251,113,133,.4); }
+  .badge.demo { color:var(--accent); border-color:rgba(108,99,255,.4); }
+  .badge.dry  { color:var(--amber); border-color:rgba(251,191,36,.4); }
+  .sub { color:var(--txt2); font-size:13px; margin:2px 0 22px; font-family:var(--mono); }
+  .sub b { color:var(--txt); }
+
+  .section-h { font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--txt3); margin:24px 0 10px; font-family:var(--mono); display:flex; align-items:center; gap:10px; }
+
+  .acct {
+    display:flex; align-items:center; gap:14px; padding:14px 18px;
+    background:var(--card); border:1px solid var(--border); border-radius:12px; margin-bottom:8px;
+  }
+  .acct.master { border-color:rgba(108,99,255,.45); background:linear-gradient(180deg,rgba(108,99,255,.06),var(--card)); }
+  .acct .dot { width:11px; height:11px; border-radius:50%; flex:none; }
+  .acct .dot.on  { background:var(--green); box-shadow:0 0 0 4px rgba(52,211,153,.14), 0 0 10px rgba(52,211,153,.5); }
+  .acct .dot.off { background:var(--red);   box-shadow:0 0 0 4px rgba(251,113,133,.12); }
+  .acct .name { font-weight:700; font-size:15px; }
+  .acct .meta { font-family:var(--mono); font-size:12px; color:var(--txt2); margin-top:2px; }
+  .acct .grow { flex:1; min-width:0; }
+  .acct .mult { font-family:var(--mono); font-size:13px; font-weight:700; color:var(--accent); }
+  .acct .state { font-family:var(--mono); font-size:12px; font-weight:700; }
+  .acct .state.on  { color:var(--green); }
+  .acct .state.off { color:var(--red); }
+  .tag-master { font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.08em; color:var(--accent); background:rgba(108,99,255,.12); padding:2px 7px; border-radius:5px; }
+  .acct .pos { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .poschip { font-family:var(--mono); font-size:11px; font-weight:700; padding:2px 8px; border-radius:5px; border:1px solid var(--border); }
+  .poschip.long  { color:var(--green); border-color:rgba(52,211,153,.35); background:rgba(52,211,153,.08); }
+  .poschip.short { color:var(--red);   border-color:rgba(251,113,133,.35); background:rgba(251,113,133,.08); }
+
+  /* license / Edge gate banner */
+  .lic { font-family:var(--mono); font-size:13px; line-height:1.45; padding:13px 16px; border-radius:10px; margin-bottom:18px; border:1px solid; }
+  .lic.err  { color:var(--red);   border-color:rgba(251,113,133,.4); background:rgba(251,113,133,.08); }
+  .lic.warn { color:var(--amber); border-color:rgba(251,191,36,.4); background:rgba(251,191,36,.08); }
+  .lic code { background:var(--card2); padding:1px 5px; border-radius:4px; color:var(--txt); }
+  .badge.edge { color:var(--green); border-color:rgba(52,211,153,.4); }
+
+  /* live order log */
+  .livedot { font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.08em; padding:2px 8px; border-radius:5px; }
+  .livedot.on  { color:var(--green); background:rgba(52,211,153,.12); }
+  .livedot.on::before { content:'● '; }
+  .livedot.off { color:var(--txt3); background:var(--card2); }
+  .livedot.off::before { content:'○ '; }
+  .log { display:flex; flex-direction:column; gap:6px; max-height:440px; overflow-y:auto; }
+  .logrow { display:flex; align-items:center; gap:12px; padding:11px 15px; background:var(--card); border:1px solid var(--border); border-left:3px solid var(--txt3); border-radius:9px; font-family:var(--mono); }
+  .logrow.ok   { border-left-color:var(--green); }
+  .logrow.warn { border-left-color:var(--amber); }
+  .logrow.err  { border-left-color:var(--red); }
+  .logrow .t { color:var(--txt3); font-size:12px; flex:none; }
+  .logrow .chip { font-size:10px; font-weight:700; letter-spacing:.06em; padding:2px 7px; border-radius:5px; background:var(--card2); color:var(--txt2); flex:none; }
+  .logrow .chip.new    { color:var(--accent); }
+  .logrow .chip.cancel { color:var(--amber); }
+  .logrow .chip.modify { color:var(--txt); }
+  .logrow .chip.blocked { color:var(--red); }
+  .logrow .desc { color:var(--txt); font-weight:600; font-size:13.5px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .logrow .res { font-size:12.5px; font-weight:700; flex:none; }
+  .logrow .res.ok   { color:var(--green); }
+  .logrow .res.warn { color:var(--amber); }
+  .logrow .res.err  { color:var(--red); }
+  @keyframes flashin { from { background:rgba(108,99,255,.20); } to { background:var(--card); } }
+  .logrow.flash { animation:flashin .8s ease; }
+  .log-empty { color:var(--txt3); font-family:var(--mono); font-size:13px; padding:18px; text-align:center; border:1px dashed var(--border); border-radius:9px; }
+
+  .offline { text-align:center; padding:60px 20px; color:var(--txt2); }
+  .offline .big { font-size:16px; color:var(--txt); font-weight:700; margin-bottom:8px; }
+  .offline code { font-family:var(--mono); background:var(--card2); border:1px solid var(--border); padding:2px 7px; border-radius:5px; color:var(--amber); }
+
+  footer { margin-top:28px; color:var(--txt3); font-family:var(--mono); font-size:11px; text-align:center; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .pulsing { animation:pulse 1.6s ease-in-out infinite; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="top">
+      <div class="offline"><div class="big pulsing">Connexion au copieur…</div></div>
+    </div>
+
+    <div class="section-h">Journal des ordres copiés <span class="livedot off" id="livedot">live</span></div>
+    <div id="log" class="log">
+      <div class="log-empty">En attente d'un ordre sur le compte maître…</div>
+    </div>
+
+    <footer>Tableau de bord local · 127.0.0.1:7879</footer>
+  </div>
+
+<script>
+  const $ = (h) => { const t = document.createElement('template'); t.innerHTML = h.trim(); return t.content.firstChild; };
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  let lastOk = 0;
+
+  // ---- account status (polled) ----
+  function posStrip(positions) {
+    const ps = (positions || []).filter(p => p.netPos);
+    if (!ps.length) return '';
+    return '<div class="pos">' + ps.map(p => {
+      const long = p.netPos > 0;
+      const px = (p.netPrice != null && p.netPrice !== 0) ? ' @' + p.netPrice : '';
+      return `<span class="poschip ${long ? 'long' : 'short'}">${esc(p.symbol)} ${long ? '+' : ''}${p.netPos}${px}</span>`;
+    }).join('') + '</div>';
+  }
+
+  function acctRow(a, isMaster) {
+    const on = !!a.connected;
+    return `
+      <div class="acct ${isMaster ? 'master' : ''}">
+        <span class="dot ${on ? 'on' : 'off'}"></span>
+        <div class="grow">
+          <div class="name">${esc(a.label)} ${isMaster ? '<span class="tag-master">MAÎTRE</span>' : ''}</div>
+          <div class="meta">${a.account ? esc(a.account) : '— compte non résolu —'}${a.accountId ? ' · #' + a.accountId : ''}</div>
+          ${posStrip(a.positions)}
+        </div>
+        ${!isMaster ? `<span class="mult">×${a.multiplier}</span>` : ''}
+        <span class="state ${on ? 'on' : 'off'}">${on ? '● connecté' : '○ déconnecté'}</span>
+      </div>`;
+  }
+
+  function licBanner(lic) {
+    if (!lic || (lic.licensed && !lic.graceActive)) return '';
+    if (lic.graceActive) {
+      return '<div class="lic warn">⚠ Vérification de la licence impossible (backend injoignable) — la copie reste active temporairement (grâce). Reconnecte-toi à internet.</div>';
+    }
+    if (!lic.hasKey) {
+      return '<div class="lic err">🔒 Copie désactivée — aucune clé de licence. Colle ta clé <b>Edge</b> dans <code>config.json</code> (champ <code>"license"</code>), puis relance.</div>';
+    }
+    return `<div class="lic err">🔒 Copie désactivée — abonnement <b>Edge</b> requis${lic.plan ? ` (plan actuel : <b>${esc(lic.plan)}</b>)` : ''}. La lecture du dashboard reste disponible.</div>`;
+  }
+
+  function renderTop(s) {
+    const followers = s.followers || [];
+    const connCount = (s.master.connected ? 1 : 0) + followers.filter(f => f.connected).length;
+    const total = 1 + followers.length;
+    const openPos = (s.master.positions || []).length + followers.reduce((n, f) => n + (f.positions || []).length, 0);
+    const env = (s.environment || '').toLowerCase();
+    const lic = s.license;
+    document.getElementById('top').innerHTML = `
+      ${licBanner(lic)}
+      <header>
+        <h1><span class="dot-live" style="background:${connCount ? 'var(--green)' : 'var(--red)'}"></span>Copieur Tradovate</h1>
+        <span class="badge ${env === 'live' ? 'live' : 'demo'}">${esc(s.environment || '?')}</span>
+        ${s.dryRun ? '<span class="badge dry">dry-run</span>' : ''}
+        ${lic && lic.licensed ? '<span class="badge edge">Edge ✓</span>' : ''}
+      </header>
+      <div class="sub"><b>${connCount}/${total}</b> connecté(s) · <b>${openPos}</b> position(s) ouverte(s)</div>
+
+      <div class="section-h">Compte maître</div>
+      ${acctRow(s.master, true)}
+
+      <div class="section-h">Followers (${followers.length})</div>
+      ${followers.map(f => acctRow(f, false)).join('')}`;
+  }
+
+  function offlineTop() {
+    document.getElementById('top').innerHTML = `
+      <div class="offline">
+        <div class="big">Copieur injoignable</div>
+        <div>Lance-le avec <code>npm start</code> (ou vérifie le service), puis recharge.</div>
+      </div>`;
+  }
+
+  async function refresh() {
+    try {
+      const r = await fetch('/api/state', { cache: 'no-store' });
+      if (!r.ok) throw new Error('http ' + r.status);
+      renderTop(await r.json());
+      lastOk = Date.now();
+    } catch (e) {
+      if (Date.now() - lastOk > 6000) offlineTop();
+    }
+  }
+  refresh();
+  setInterval(refresh, 2000);
+
+  // ---- live order-copy log (SSE) ----
+  const KIND = { new: 'ORDRE', cancel: 'ANNULÉ', modify: 'MODIFIÉ', blocked: 'BLOQUÉ' };
+  const fmtTime = (ts) => { const d = new Date(ts), p = n => String(n).padStart(2,'0'); return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
+
+  function addLog(e) {
+    const el = document.getElementById('log');
+    const empty = el.querySelector('.log-empty'); if (empty) empty.remove();
+
+    const legs = e.legs || [];
+    const total = legs.filter(l => l.status !== 'skipped').length;
+    const failed = e.failed || 0;
+    const cls = e.kind === 'blocked' ? 'err' : (failed > 0 ? (e.ok > 0 ? 'warn' : 'err') : 'ok');
+
+    let desc;
+    if (e.kind === 'blocked') {
+      desc = `${String(e.action || '').toUpperCase()} ${e.qty} ${esc(e.symbol || '')} — ${esc(e.note || 'bloqué')}`;
+    } else if (e.kind === 'new') {
+      desc = `${String(e.action || '').toUpperCase()} ${e.qty} ${esc(e.symbol || '')} ${esc(e.orderType || '')}`
+        + (e.price != null ? ` @${e.price}` : '') + (e.stopPrice != null ? ` stop ${e.stopPrice}` : '');
+    } else if (e.kind === 'cancel') {
+      desc = `annulation · ordre #${e.masterOrderId}`;
+    } else {
+      desc = `modification · ordre #${e.masterOrderId}` + (e.qty != null ? ` → qty ${e.qty}` : '');
+    }
+
+    let res;
+    if (e.kind === 'blocked') res = '🔒 non copié';
+    else if (e.kind === 'cancel') res = `${e.ok} annulé(s)`;
+    else res = `${e.ok}/${total} ✓` + (failed ? ` · ${failed} échec(s)` : '');
+
+    const fresh = (Date.now() - (e.ts || 0)) < 4000;
+    const row = $(`<div class="logrow ${cls} ${fresh ? 'flash' : ''}">
+      <span class="t">${fmtTime(e.ts)}</span>
+      <span class="chip ${e.kind}">${KIND[e.kind] || e.kind}</span>
+      <span class="desc">${desc}</span>
+      <span class="res ${cls}">${res}</span>
+    </div>`);
+    const failedLabels = legs.filter(l => l.status === 'failed').map(l => l.label);
+    if (failedLabels.length) row.title = 'Échecs : ' + failedLabels.join(', ');
+
+    el.prepend(row);
+    while (el.children.length > 200) el.removeChild(el.lastChild);
+  }
+
+  function connectSse() {
+    const dot = document.getElementById('livedot');
+    const es = new EventSource('/api/events');
+    es.onopen = () => { dot.className = 'livedot on'; };
+    es.onerror = () => { dot.className = 'livedot off'; };  // EventSource auto-reconnects
+    es.onmessage = (m) => { try { addLog(JSON.parse(m.data)); } catch (_) {} };
+  }
+  connectSse();
+</script>
+</body>
+</html>

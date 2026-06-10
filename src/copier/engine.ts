@@ -1,4 +1,5 @@
 import type { AccountConfig, Config } from "../config";
+import type { LicenseGate } from "../license";
 import { logger } from "../logger";
 import { TradovateClient, type ClientOptions } from "../tradovate/client";
 import type { Account, Order, OrderVersion, PropsEvent } from "../tradovate/types";
@@ -20,13 +21,31 @@ interface Follower {
 interface MirrorLeg {
   follower: Follower;
   qty: number;
-  status: "pending" | "placed" | "canceled" | "skipped";
+  status: "pending" | "placed" | "canceled" | "skipped" | "failed";
   followerOrderId?: number;
+  error?: string;
 }
 
 interface MirrorRecord {
   legs: MirrorLeg[];
   lastVersionId: number;
+}
+
+/** A copy action broadcast to the dashboard's live order log. */
+export interface CopyEvent {
+  ts: number;
+  kind: "new" | "cancel" | "modify" | "blocked";
+  masterOrderId: number;
+  action?: string;
+  qty?: number;
+  symbol?: string;
+  orderType?: string;
+  price?: number;
+  stopPrice?: number;
+  ok: number;
+  failed: number;
+  legs: Array<{ label: string; status: string; qty: number; error?: string }>;
+  note?: string;
 }
 
 const log = logger("engine");
@@ -46,9 +65,18 @@ export class CopierEngine {
   private handled = new Set<number>();
   /** follower indices whose account is resolved (so re-syncs don't re-log) */
   private resolvedFollowers = new Set<number>();
+  /** dashboard live-log subscribers */
+  private copyListeners = new Set<(e: CopyEvent) => void>();
+  /** Edge entitlement gate (set via setLicenseGate); copying requires it. */
+  private gate?: LicenseGate;
 
   constructor(cfg: Config) {
     this.cfg = cfg;
+  }
+
+  /** Wire the Edge license gate. New copies are blocked unless `gate.licensed`. */
+  setLicenseGate(gate: LicenseGate): void {
+    this.gate = gate;
   }
 
   // One websocket per distinct login (token, or name+cid); accounts on the same
@@ -297,6 +325,26 @@ export class CopierEngine {
     const rec = this.mirrors.get(o.id);
     if (!rec) return;
 
+    // Edge gate: block NEW copies when unlicensed (cancels/modifies still flow,
+    // so a lapsed subscription can still close out existing mirrored positions).
+    if (this.gate && !this.gate.licensed) {
+      log.warn(`🔒 Edge requis — ordre maître #${o.id} NON répliqué (copie désactivée).`);
+      this.emitCopy({
+        ts: Date.now(),
+        kind: "blocked",
+        masterOrderId: o.id,
+        action: o.action,
+        qty: v.orderQty,
+        symbol,
+        orderType: v.orderType,
+        ok: 0,
+        failed: 0,
+        legs: [],
+        note: "Abonnement Edge requis",
+      });
+      return;
+    }
+
     log.info(
       `MASTER ${o.action} ${v.orderQty} ${symbol} ${v.orderType}` +
         (v.price ? ` @${v.price}` : "") +
@@ -340,11 +388,27 @@ export class CopierEngine {
           leg.status = "placed";
           log.info(`  ${f.label}: placed order#${leg.followerOrderId} (${qty} ${sym})`);
         } catch (err) {
-          leg.status = "skipped";
+          leg.status = "failed";
+          leg.error = String(err);
           log.error(`  ${f.label}: placeorder FAILED — ${String(err)}`);
         }
       }),
     );
+
+    this.emitCopy({
+      ts: Date.now(),
+      kind: "new",
+      masterOrderId: o.id,
+      action: o.action,
+      qty: v.orderQty,
+      symbol,
+      orderType: v.orderType,
+      price: v.price,
+      stopPrice: v.stopPrice,
+      ok: rec.legs.filter((l) => l.status === "placed").length,
+      failed: rec.legs.filter((l) => l.status === "failed").length,
+      legs: rec.legs.map((l) => ({ label: l.follower.label, status: l.status, qty: l.qty, error: l.error })),
+    });
   }
 
   private async propagateCancel(masterOrderId: number): Promise<void> {
@@ -368,6 +432,15 @@ export class CopierEngine {
           }
         }),
     );
+
+    this.emitCopy({
+      ts: Date.now(),
+      kind: "cancel",
+      masterOrderId,
+      ok: rec.legs.filter((l) => l.status === "canceled").length,
+      failed: 0,
+      legs: rec.legs.map((l) => ({ label: l.follower.label, status: l.status, qty: l.qty, error: l.error })),
+    });
   }
 
   private async propagateModify(masterOrderId: number, v: OrderVersion): Promise<void> {
@@ -398,6 +471,19 @@ export class CopierEngine {
           }
         }),
     );
+
+    this.emitCopy({
+      ts: Date.now(),
+      kind: "modify",
+      masterOrderId,
+      qty: v.orderQty,
+      orderType: v.orderType,
+      price: v.price,
+      stopPrice: v.stopPrice,
+      ok: rec.legs.filter((l) => l.status === "placed").length,
+      failed: 0,
+      legs: rec.legs.map((l) => ({ label: l.follower.label, status: l.status, qty: l.qty, error: l.error })),
+    });
   }
 
   // --- browser-extension bridge --------------------------------------------
@@ -424,6 +510,45 @@ export class CopierEngine {
       ready: c.isReady,
       sub: c.sub,
     }));
+  }
+
+  /** Per-ACCOUNT state for the local dashboard (port 7879). `connected` = the
+   *  underlying login's websocket is authorized + open. */
+  dashboardState() {
+    return {
+      environment: this.cfg.environment,
+      dryRun: this.cfg.dryRun,
+      license: this.gate?.status() ?? null,
+      master: {
+        label: this.cfg.master.label,
+        account: this.masterAccountSpec || null,
+        accountId: this.masterAccountId || null,
+        connected: this.masterClient?.isReady ?? false,
+        positions: this.masterAccountId ? this.masterClient.openPositions(this.masterAccountId) : [],
+      },
+      followers: this.followers.map((f) => ({
+        label: f.label,
+        account: f.accountSpec || null,
+        accountId: f.accountId || null,
+        multiplier: f.multiplier,
+        connected: f.client.isReady,
+        positions: f.accountId ? f.client.openPositions(f.accountId) : [],
+      })),
+    };
+  }
+
+  /** Subscribe to copy actions — used by the dashboard's live order log. */
+  onCopyEvent(h: (e: CopyEvent) => void): void {
+    this.copyListeners.add(h);
+  }
+  private emitCopy(e: CopyEvent): void {
+    for (const h of this.copyListeners) {
+      try {
+        h(e);
+      } catch (err) {
+        log.error(`copy-event handler threw: ${String(err)}`);
+      }
+    }
   }
 
   async stop(): Promise<void> {

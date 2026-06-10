@@ -20,6 +20,7 @@ import type {
   Account,
   Contract,
   Environment,
+  Position,
   PropsEvent,
   TokenResponse,
 } from "./types";
@@ -86,6 +87,8 @@ export class TradovateClient {
   private entityHandlers = new Set<EntityHandler>();
   private statusHandlers = new Set<StatusHandler>();
   private contractCache = new Map<number, string>();
+  /** accountId -> (contractId -> net position) for this login's accounts */
+  private positions = new Map<number, Map<number, { netPos: number; netPrice?: number }>>();
 
   constructor(opts: ClientOptions) {
     this.opts = opts;
@@ -94,6 +97,8 @@ export class TradovateClient {
     this.restBase = opts.restBase ?? REST_BASE[opts.environment];
     this.wsUrl = opts.wsUrl ?? WS_URL[opts.environment];
     this.log = logger(opts.label);
+    // Track net positions for every account on this login (for the dashboard).
+    this.onEntity((ev) => this.trackPosition(ev));
   }
 
   onEntity(h: EntityHandler) {
@@ -370,6 +375,40 @@ export class TradovateClient {
 
   private emitStatus(status: "connected" | "disconnected" | "ready"): void {
     for (const h of this.statusHandlers) h(status);
+  }
+
+  // --- position tracking (per account, for the dashboard) -------------------
+
+  /** Keep a per-account net-position map updated from the entity stream. */
+  private trackPosition(ev: PropsEvent): void {
+    if (ev.entityType !== "position") return;
+    const p = ev.entity as unknown as Position;
+    if (typeof p.accountId !== "number" || typeof p.contractId !== "number") return;
+    let acct = this.positions.get(p.accountId);
+    if (!acct) {
+      acct = new Map();
+      this.positions.set(p.accountId, acct);
+    }
+    acct.set(p.contractId, { netPos: p.netPos ?? 0, netPrice: p.netPrice });
+  }
+
+  /** Open (non-flat) positions for one account; symbols resolved when cached. */
+  openPositions(
+    accountId: number,
+  ): Array<{ symbol: string; contractId: number; netPos: number; netPrice?: number }> {
+    const acct = this.positions.get(accountId);
+    if (!acct) return [];
+    const out: Array<{ symbol: string; contractId: number; netPos: number; netPrice?: number }> = [];
+    for (const [contractId, p] of acct) {
+      if (!p.netPos) continue;
+      out.push({
+        symbol: this.contractCache.get(contractId) ?? `#${contractId}`,
+        contractId,
+        netPos: p.netPos,
+        netPrice: p.netPrice,
+      });
+    }
+    return out;
   }
 
   // --- request/response over the socket -------------------------------------

@@ -49,6 +49,8 @@ export interface Config {
   appVersion: string;
   /** When true, log intended follower orders but never actually send them. */
   dryRun: boolean;
+  /** Edge license key (copy-pasted from Let-Trade Journal). Unlocks copying. */
+  license?: string;
   auth: AuthConfig;
   master: AccountConfig;
   followers: FollowerConfig[];
@@ -124,6 +126,7 @@ export function loadConfig(path: string): Config {
     appId: c.appId ?? "MacCopier",
     appVersion: c.appVersion ?? "0.1",
     dryRun: c.dryRun ?? true,
+    license: c.license,
     auth,
     master,
     followers,

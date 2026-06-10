@@ -2,6 +2,8 @@ import { resolve } from "node:path";
 import { loadConfig } from "./config";
 import { CopierEngine } from "./copier/engine";
 import { startBridge } from "./bridge";
+import { startDashboard } from "./dashboard";
+import { LicenseGate } from "./license";
 import { logger, setLogLevel } from "./logger";
 
 const log = logger("main");
@@ -18,9 +20,12 @@ async function main() {
   }
 
   const engine = new CopierEngine(cfg);
+  const gate = new LicenseGate();
+  engine.setLicenseGate(gate);
 
   const shutdown = async (signal: string) => {
     log.warn(`Received ${signal}, shutting down…`);
+    gate.stop();
     await engine.stop();
     process.exit(0);
   };
@@ -36,6 +41,20 @@ async function main() {
       log.warn(`Could not start extension bridge: ${String(err)}`);
     }
   }
+
+  // Local web dashboard (own port, separate from the extension bridge).
+  if (process.env.DASHBOARD !== "off") {
+    try {
+      startDashboard(engine, Number(process.env.DASHBOARD_PORT) || 7879);
+    } catch (err) {
+      log.warn(`Could not start dashboard: ${String(err)}`);
+    }
+  }
+
+  // Verify the Edge entitlement before going live (and re-check periodically).
+  // Copying stays locked until a valid Edge license is confirmed; the dashboard
+  // and account/position views still work.
+  await gate.start(cfg.license);
 
   await engine.start();
 }
