@@ -69,14 +69,19 @@
     <div class="step locked" id="s2">
       <div class="num">Étape 2 — Connecte Tradovate</div>
       <h2>Branche tes comptes</h2>
-      <p><b>1.</b> Installe l'<b>extension Let Trade Copieur</b> (bouton ci-dessous). &nbsp;<b>2.</b> Connecte-toi sur <b>Tradovate</b> dans Chrome → tes comptes apparaissent ici tout seuls.</p>
-      <button class="primary" onclick="openExt()">📦 Installer l'extension</button>
-      <div class="hint" id="extHint" style="display:none; margin-top:12px; line-height:1.8">
-        Le dossier <b>Let-Trade-Copieur-Extension</b> vient de s'ouvrir dans tes <b>Téléchargements</b>. Dans Chrome :<br>
-        ① va sur <b>chrome://extensions</b> &nbsp; ② active <b>« Mode développeur »</b> (en haut à droite) &nbsp; ③ clique <b>« Charger l'extension non empaquetée »</b> et choisis le dossier <b>Let-Trade-Copieur-Extension</b>.<br>
-        ④ <b>Rafraîchis ton onglet Tradovate</b> (Cmd+R) → tes comptes remontent juste en dessous.
+      <p>Une petite extension Chrome capte ta session Tradovate (aucun mot de passe à saisir). Clique le bouton : <b>j'ouvre Chrome et le dossier de l'extension pour toi</b>, puis suis les 4 étapes.</p>
+      <button class="primary" onclick="openExt()">📦 Installer l'extension — j'ouvre tout pour toi</button>
+      <div class="hint" id="extHint" style="display:none; margin-top:14px">
+        <div style="color:var(--green); font-weight:700; margin-bottom:10px">✓ J'ai ouvert pour toi : la page <b>Extensions</b> de Chrome + le dossier <b>Let-Trade-Copieur-Extension</b> (dans tes Téléchargements).</div>
+        <div style="font-weight:700; color:var(--txt); margin-bottom:6px">Dans la fenêtre Chrome qui vient de s'ouvrir :</div>
+        <ol style="margin:0; padding-left:22px; line-height:2.05">
+          <li>En <b>haut à droite</b>, active l'interrupteur <b>« Mode développeur »</b>.</li>
+          <li>Un bouton <b>« Charger l'extension non empaquetée »</b> apparaît en haut à gauche → clique dessus.</li>
+          <li>Choisis le dossier <b>Let-Trade-Copieur-Extension</b> (déjà ouvert), puis <b>Ouvrir</b>.</li>
+          <li>Retourne sur ton onglet <b>Tradovate</b> et <b>rafraîchis la page</b> (Cmd+R / Ctrl+R).</li>
+        </ol>
       </div>
-      <div class="msg wait" id="s2msg" style="margin-top:14px"><span class="spin"></span>En attente de tes comptes… <span style="color:var(--txt3)">— rien ne vient ? rafraîchis ton onglet Tradovate (Cmd+R)</span></div>
+      <div class="msg wait" id="s2msg" style="margin-top:14px"><span class="spin"></span>En attente de tes comptes… <span style="color:var(--txt3)">— suis les 4 étapes ci-dessus</span></div>
       <div class="accts" id="accts"></div>
     </div>
 
@@ -159,8 +164,12 @@
   async function poll() {
     try {
       const d = await (await fetch('/api/setup', { cache:'no-store' })).json();
+      if (d.extConnected && !accounts.length && (!d.accounts || !d.accounts.length)) {
+        $('s2msg').className = 'msg ok';
+        $('s2msg').innerHTML = '<span class="spin"></span>✓ Extension connectée — je récupère tes comptes…';
+      }
       if (d.accounts && d.accounts.length !== accounts.length) { accounts = d.accounts; renderAccounts(); }
-    } catch {}
+    } catch (_) {}
   }
   setInterval(poll, 1500); poll();
 </script>

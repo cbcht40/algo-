@@ -52,6 +52,18 @@ function revealExtension(): string {
   return target;
 }
 
+// Open Chrome straight to the extensions page so the user doesn't have to type
+// chrome://extensions themselves.
+function openChromeExtensions(): void {
+  try {
+    if (process.platform === "darwin") spawn("open", ["-a", "Google Chrome", "chrome://extensions/"], { detached: true, stdio: "ignore" }).unref();
+    else if (process.platform === "win32") spawn("cmd", ["/c", "start", "chrome", "chrome://extensions/"], { detached: true, stdio: "ignore" }).unref();
+    else spawn("google-chrome", ["chrome://extensions/"], { detached: true, stdio: "ignore" }).unref();
+  } catch {
+    /* best effort — the on-screen hint tells the user to open it manually */
+  }
+}
+
 interface DiscoveredLogin {
   sub: string;
   token: string;
@@ -73,6 +85,7 @@ export function startSetup(opts: SetupOptions): void {
   const logins = new Map<string, DiscoveredLogin>();
   const discovering = new Set<string>();
   let license = { key: "", unlocked: false, plan: "", email: "", error: "" };
+  let tokenSeen = false; // the extension has pushed at least one token (it's working)
 
   // Validate a session token by connecting and reading its accounts (demo then live).
   async function discover(token: string): Promise<void> {
@@ -123,7 +136,10 @@ export function startSetup(opts: SetupOptions): void {
       req.on("end", () => {
         try {
           const token = String(JSON.parse(body || "{}").token ?? "");
-          if (token) void discover(token);
+          if (token) {
+            tokenSeen = true;
+            void discover(token);
+          }
         } catch {
           /* ignore */
         }
@@ -139,6 +155,7 @@ export function startSetup(opts: SetupOptions): void {
 
   const state = () => ({
     mode: "setup",
+    extConnected: tokenSeen,
     license: { unlocked: license.unlocked, plan: license.plan, email: license.email, error: license.error, hasKey: !!license.key },
     accounts: [...logins.values()].flatMap((l) => l.accounts.map((name) => ({ name, env: l.env }))),
   });
@@ -184,6 +201,7 @@ export function startSetup(opts: SetupOptions): void {
 
     if (req.method === "POST" && req.url?.startsWith("/api/extension")) {
       const extPath = revealExtension();
+      openChromeExtensions();
       return void json(200, { ok: true, path: extPath });
     }
 
