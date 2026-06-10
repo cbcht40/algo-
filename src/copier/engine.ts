@@ -69,6 +69,8 @@ export class CopierEngine {
   private copyListeners = new Set<(e: CopyEvent) => void>();
   /** Edge entitlement gate (set via setLicenseGate); copying requires it. */
   private gate?: LicenseGate;
+  /** User-controlled arm switch — nothing is copied until the user arms it. */
+  private active = false;
 
   constructor(cfg: Config) {
     this.cfg = cfg;
@@ -77,6 +79,16 @@ export class CopierEngine {
   /** Wire the Edge license gate. New copies are blocked unless `gate.licensed`. */
   setLicenseGate(gate: LicenseGate): void {
     this.gate = gate;
+  }
+
+  /** Arm/disarm copying — the dashboard ON/OFF switch. Disarmed by default so
+   *  the copier never mirrors until the user explicitly turns it on. */
+  setActive(on: boolean): void {
+    this.active = on;
+    log.info(on ? "▶ Copieur ARMÉ — la copie est active." : "⏸ Copieur DÉSARMÉ — copie en pause.");
+  }
+  get isActive(): boolean {
+    return this.active;
   }
 
   // One websocket per distinct login (token, or name+cid); accounts on the same
@@ -325,6 +337,25 @@ export class CopierEngine {
     const rec = this.mirrors.get(o.id);
     if (!rec) return;
 
+    // Arm switch: the copier mirrors nothing until the user explicitly arms it.
+    if (!this.active) {
+      log.info(`⏸ Désarmé — ordre maître #${o.id} non copié (arme le copieur avant de trader).`);
+      this.emitCopy({
+        ts: Date.now(),
+        kind: "blocked",
+        masterOrderId: o.id,
+        action: o.action,
+        qty: v.orderQty,
+        symbol,
+        orderType: v.orderType,
+        ok: 0,
+        failed: 0,
+        legs: [],
+        note: "Copieur désarmé",
+      });
+      return;
+    }
+
     // Edge gate: block NEW copies when unlicensed (cancels/modifies still flow,
     // so a lapsed subscription can still close out existing mirrored positions).
     if (this.gate && !this.gate.licensed) {
@@ -518,6 +549,7 @@ export class CopierEngine {
     return {
       environment: this.cfg.environment,
       dryRun: this.cfg.dryRun,
+      active: this.active,
       license: this.gate?.status() ?? null,
       master: {
         label: this.cfg.master.label,

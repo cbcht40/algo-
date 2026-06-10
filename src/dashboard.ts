@@ -41,6 +41,24 @@ export function startDashboard(engine: CopierEngine, port = 7879): void {
       return;
     }
 
+    // Arm/disarm the copier (the dashboard ON/OFF switch).
+    if (req.method === "POST" && req.url?.startsWith("/api/active")) {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        let on = false;
+        try {
+          on = !!JSON.parse(body || "{}").active;
+        } catch {
+          /* malformed body → stay disarmed */
+        }
+        engine.setActive(on);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ active: on }));
+      });
+      return;
+    }
+
     if (req.method === "GET" && req.url?.startsWith("/api/events")) {
       res.writeHead(200, {
         "Content-Type": "text/event-stream",

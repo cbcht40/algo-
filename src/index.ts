@@ -54,7 +54,7 @@ async function main() {
   // Verify the Edge entitlement before going live (and re-check periodically).
   // Copying stays locked until a valid Edge license is confirmed; the dashboard
   // and account/position views still work.
-  await gate.start(cfg.license);
+  await gate.start(cfg.license || process.env.COPIER_LICENSE);
 
   await engine.start();
 }

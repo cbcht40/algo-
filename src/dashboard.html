@@ -59,6 +59,23 @@
   .lic code { background:var(--card2); padding:1px 5px; border-radius:4px; color:var(--txt); }
   .badge.edge { color:var(--green); border-color:rgba(52,211,153,.4); }
 
+  /* ARMÉ / DÉSARMÉ switch */
+  .arm { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 20px; border-radius:14px; margin-bottom:18px; border:1px solid; }
+  .arm.on  { background:rgba(52,211,153,.07); border-color:rgba(52,211,153,.4); }
+  .arm.off { background:var(--card); border-color:var(--border); }
+  .arm-state { display:flex; align-items:center; gap:14px; min-width:0; }
+  .arm-dot { width:14px; height:14px; border-radius:50%; flex:none; }
+  .arm.on  .arm-dot { background:var(--green); box-shadow:0 0 0 5px rgba(52,211,153,.16), 0 0 12px rgba(52,211,153,.6); animation:pulse 1.8s ease-in-out infinite; }
+  .arm.off .arm-dot { background:var(--txt3); }
+  .arm-title { font-size:16px; font-weight:800; letter-spacing:-.2px; }
+  .arm.on  .arm-title { color:var(--green); }
+  .arm.off .arm-title { color:var(--txt2); }
+  .arm-sub { font-family:var(--mono); font-size:12px; color:var(--txt3); margin-top:2px; }
+  .arm-btn { font-family:var(--mono); font-size:14px; font-weight:800; letter-spacing:.04em; padding:12px 26px; border-radius:10px; border:1px solid transparent; cursor:pointer; flex:none; transition:opacity .15s; }
+  .arm.off .arm-btn { background:var(--green); color:#06121d; }
+  .arm.on  .arm-btn { background:transparent; color:var(--red); border-color:rgba(251,113,133,.45); }
+  .arm-btn:hover { opacity:.85; }
+
   /* live order log */
   .livedot { font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.08em; padding:2px 8px; border-radius:5px; }
   .livedot.on  { color:var(--green); background:rgba(52,211,153,.12); }
@@ -150,6 +167,28 @@
     return `<div class="lic err">🔒 Copie désactivée — abonnement <b>Edge</b> requis${lic.plan ? ` (plan actuel : <b>${esc(lic.plan)}</b>)` : ''}. La lecture du dashboard reste disponible.</div>`;
   }
 
+  function armBar(active) {
+    return `
+      <div class="arm ${active ? 'on' : 'off'}">
+        <div class="arm-state">
+          <span class="arm-dot"></span>
+          <div>
+            <div class="arm-title">${active ? 'ARMÉ — la copie est active' : 'DÉSARMÉ — copie en pause'}</div>
+            <div class="arm-sub">${active ? 'Tes ordres maître sont répliqués en temps réel.' : 'Arme le copieur avant de trader. Rien n’est copié tant qu’il est en pause.'}</div>
+          </div>
+        </div>
+        <button class="arm-btn" onclick="setArmed(${active ? 'false' : 'true'})">${active ? 'DÉSARMER' : 'ARMER'}</button>
+      </div>`;
+  }
+
+  async function setArmed(on) {
+    try {
+      await fetch('/api/active', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: on }) });
+      refresh();
+    } catch (_) { /* server down — the 2s poll will resync */ }
+  }
+  window.setArmed = setArmed;
+
   function renderTop(s) {
     const followers = s.followers || [];
     const connCount = (s.master.connected ? 1 : 0) + followers.filter(f => f.connected).length;
@@ -158,6 +197,7 @@
     const env = (s.environment || '').toLowerCase();
     const lic = s.license;
     document.getElementById('top').innerHTML = `
+      ${armBar(!!s.active)}
       ${licBanner(lic)}
       <header>
         <h1><span class="dot-live" style="background:${connCount ? 'var(--green)' : 'var(--red)'}"></span>Copieur Tradovate</h1>
