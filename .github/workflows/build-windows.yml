@@ -1,0 +1,35 @@
+name: Build Windows installer
+
+# Builds the Windows .exe on a Windows runner (a Mac can't produce it cleanly).
+# Runs on push to this branch + on manual dispatch. The installer is uploaded as
+# a workflow artifact; it's then published to the public let-trade-copieur release.
+on:
+  push:
+    branches: ['claude/inspiring-meitner-9240f3']
+    paths:
+      - 'src/**'
+      - 'electron/**'
+      - 'scripts/**'
+      - 'extension/**'
+      - 'package.json'
+      - '.github/workflows/build-windows.yml'
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      - run: npm ci
+      - name: Build the Windows installer
+        run: npm run dist:win
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer
+          path: release/*.exe
+          if-no-files-found: error
