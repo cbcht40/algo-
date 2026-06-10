@@ -39,6 +39,7 @@
     "appId": "com.lettradejournal.copier",
     "productName": "Let Trade Copieur",
     "artifactName": "Let-Trade-Copieur-${version}-${arch}.${ext}",
+    "afterPack": "scripts/afterpack.cjs",
     "asar": false,
     "files": [
       "electron/**",
