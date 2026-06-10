@@ -57,7 +57,7 @@ async function main() {
   // Local web dashboard (own port, separate from the extension bridge).
   if (process.env.DASHBOARD !== "off") {
     try {
-      startDashboard(engine, Number(process.env.DASHBOARD_PORT) || 7879);
+      startDashboard(engine, Number(process.env.DASHBOARD_PORT) || 7879, cfg.license || process.env.COPIER_LICENSE || "");
     } catch (err) {
       log.warn(`Could not start dashboard: ${String(err)}`);
     }

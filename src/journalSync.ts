@@ -1,8 +1,9 @@
-// Journal auto-sync. While the Copieur runs, it periodically pulls the fills it can
-// see (with its always-fresh Tradovate token) and pushes the resulting trades into
-// the user's Let-Trade Journal. Authenticated by the Edge license — no token ever
-// leaves the machine, only the trades. The server (/api/copier-sync) gates on Edge
-// and deduplicates, so re-sending the same window is safe.
+// Journal sync. The Copieur pulls the fills it can see (with its always-fresh
+// Tradovate token) and pushes the resulting trades into the user's Let-Trade Journal
+// (/api/copier-sync — Edge-gated + deduplicated). Two entry points:
+//   - startJournalSync(): periodic background sync (last N days, all accounts).
+//   - listAccounts()/importRange(): on-demand import driven by the website button,
+//     exposed through the Copieur's local dashboard server.
 import { logger } from "./logger";
 import type { CopierEngine } from "./copier/engine";
 
@@ -110,8 +111,113 @@ function groupFillsToTrades(fills: Fill[], symbolMap: Record<number, string>, br
   return trades;
 }
 
-/** Start the periodic journal sync. Returns a stop() function. No-op without a
- *  license, or when JOURNAL_SYNC=off. */
+export interface AccountInfo {
+  id: number;
+  name: string;
+}
+
+/** Authenticated accounts across all logins — feeds the website's account picker. */
+export function listAccounts(engine: CopierEngine): AccountInfo[] {
+  const out: AccountInfo[] = [];
+  const seen = new Set<number>();
+  for (const client of engine.allClients()) {
+    if (!client.isAuthenticated) continue;
+    for (const acct of client.accounts) {
+      if (seen.has(acct.id)) continue;
+      seen.add(acct.id);
+      out.push({ id: acct.id, name: acct.name });
+    }
+  }
+  return out;
+}
+
+// Fetch + FIFO-group fills in [sinceMs, untilMs] (optionally a single account).
+async function collectTrades(
+  engine: CopierEngine,
+  opts: { sinceMs: number; untilMs?: number; accountId?: number },
+): Promise<SyncTrade[]> {
+  const untilMs = opts.untilMs ?? Date.now();
+  const all: SyncTrade[] = [];
+
+  for (const client of engine.allClients()) {
+    if (!client.isAuthenticated) continue;
+    let fills: Fill[];
+    try {
+      fills = (await client.restGet("/fill/list")) as Fill[];
+    } catch (e) {
+      log.warn(`Fills indisponibles : ${(e as Error).message}`);
+      continue;
+    }
+    if (!Array.isArray(fills) || !fills.length) continue;
+
+    const recent = fills.filter((f) => {
+      if (!f.timestamp) return false;
+      const t = new Date(f.timestamp).getTime();
+      if (t < opts.sinceMs || t > untilMs) return false;
+      if (opts.accountId != null && f.accountId !== opts.accountId) return false;
+      return true;
+    });
+    if (!recent.length) continue;
+
+    const ids = [...new Set(recent.map((f) => f.contractId))];
+    const symbolMap: Record<number, string> = {};
+    await Promise.all(
+      ids.map(async (id) => {
+        try {
+          const c = (await client.restGet(`/contract/item?id=${id}`)) as { name?: string; symbol?: string };
+          symbolMap[id] = c?.name || c?.symbol || `#${id}`;
+        } catch {
+          symbolMap[id] = `#${id}`;
+        }
+      }),
+    );
+
+    const accts = opts.accountId != null ? client.accounts.filter((a) => a.id === opts.accountId) : client.accounts;
+    for (const acct of accts) {
+      const af = recent.filter((f) => f.accountId === acct.id);
+      if (!af.length) continue;
+      all.push(...groupFillsToTrades(af, symbolMap, `Tradovate · ${acct.name}`));
+    }
+  }
+  return all;
+}
+
+async function pushTrades(license: string, trades: SyncTrade[]): Promise<{ imported: number; skipped: number; error?: string }> {
+  if (!trades.length) return { imported: 0, skipped: 0 };
+  try {
+    const r = await fetch(SYNC_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ key: license, trades }),
+    });
+    const j = (await r.json().catch(() => ({}))) as { inserted?: number; skipped?: number; error?: string };
+    if (!r.ok) return { imported: 0, skipped: 0, error: j.error || `HTTP ${r.status}` };
+    return { imported: j.inserted ?? 0, skipped: j.skipped ?? 0 };
+  } catch (e) {
+    return { imported: 0, skipped: 0, error: (e as Error).message };
+  }
+}
+
+export interface SyncResult {
+  imported: number;
+  skipped: number;
+  found: number;
+  error?: string;
+}
+
+/** On-demand import (website button): fetch a window for one (or all) accounts and push. */
+export async function importRange(
+  engine: CopierEngine,
+  license: string,
+  opts: { accountId?: number; sinceMs: number; untilMs?: number },
+): Promise<SyncResult> {
+  if (!license) return { imported: 0, skipped: 0, found: 0, error: "licence manquante" };
+  const trades = await collectTrades(engine, opts);
+  const res = await pushTrades(license, trades);
+  return { ...res, found: trades.length };
+}
+
+/** Periodic background sync (last N days, all authenticated accounts). */
 export function startJournalSync(engine: CopierEngine, license: string): () => void {
   if (!license) {
     log.info("Synchro journal désactivée (pas de licence).");
@@ -128,58 +234,14 @@ export function startJournalSync(engine: CopierEngine, license: string): () => v
     if (busy) return;
     busy = true;
     try {
-      const cutoff = Date.now() - WINDOW_DAYS * 86_400_000;
-      const all: SyncTrade[] = [];
-
-      for (const client of engine.allClients()) {
-        if (!client.isAuthenticated) continue; // not connected yet — its token will arrive via the extension
-        let fills: Fill[];
-        try {
-          fills = (await client.restGet("/fill/list")) as Fill[];
-        } catch (e) {
-          log.warn(`Fills indisponibles : ${(e as Error).message}`);
-          continue;
-        }
-        if (!Array.isArray(fills) || !fills.length) continue;
-        const recent = fills.filter((f) => f.timestamp && new Date(f.timestamp).getTime() >= cutoff);
-        if (!recent.length) continue;
-
-        const ids = [...new Set(recent.map((f) => f.contractId))];
-        const symbolMap: Record<number, string> = {};
-        await Promise.all(
-          ids.map(async (id) => {
-            try {
-              const c = (await client.restGet(`/contract/item?id=${id}`)) as { name?: string; symbol?: string };
-              symbolMap[id] = c?.name || c?.symbol || `#${id}`;
-            } catch {
-              symbolMap[id] = `#${id}`;
-            }
-          }),
-        );
-
-        for (const acct of client.accounts) {
-          const af = recent.filter((f) => f.accountId === acct.id);
-          if (!af.length) continue;
-          all.push(...groupFillsToTrades(af, symbolMap, `Tradovate · ${acct.name}`));
-        }
-      }
-
-      if (!all.length) {
+      const trades = await collectTrades(engine, { sinceMs: Date.now() - WINDOW_DAYS * 86_400_000 });
+      if (!trades.length) {
         log.info("Synchro journal : rien de nouveau (comptes connectés sans trade récent).");
         return;
       }
-
-      const r = await fetch(SYNC_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: license, trades: all }),
-      });
-      const j = (await r.json().catch(() => ({}))) as { inserted?: number; skipped?: number; error?: string };
-      if (r.ok) {
-        log.info(`Journal synchronisé : ${j.inserted ?? 0} nouveau(x), ${j.skipped ?? 0} déjà présent(s).`);
-      } else {
-        log.warn(`Synchro journal refusée : ${j.error || r.status}`);
-      }
+      const r = await pushTrades(license, trades);
+      if (r.error) log.warn(`Synchro journal refusée : ${r.error}`);
+      else log.info(`Journal synchronisé : ${r.imported} nouveau(x), ${r.skipped} déjà présent(s).`);
     } catch (e) {
       log.warn(`Synchro journal : ${(e as Error).message}`);
     } finally {
