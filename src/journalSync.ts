@@ -132,6 +132,7 @@ export function startJournalSync(engine: CopierEngine, license: string): () => v
       const all: SyncTrade[] = [];
 
       for (const client of engine.allClients()) {
+        if (!client.isAuthenticated) continue; // not connected yet — its token will arrive via the extension
         let fills: Fill[];
         try {
           fills = (await client.restGet("/fill/list")) as Fill[];
@@ -163,7 +164,10 @@ export function startJournalSync(engine: CopierEngine, license: string): () => v
         }
       }
 
-      if (!all.length) return;
+      if (!all.length) {
+        log.info("Synchro journal : rien de nouveau (comptes connectés sans trade récent).");
+        return;
+      }
 
       const r = await fetch(SYNC_URL, {
         method: "POST",

@@ -120,6 +120,11 @@ export class TradovateClient {
     return r.json();
   }
 
+  /** Has a usable (renewed) access token right now. */
+  get isAuthenticated(): boolean {
+    return !!this.token?.accessToken;
+  }
+
   /** Authenticate over REST, open the websocket, authorize it, then sync. */
   async start(): Promise<void> {
     await this.authenticate();
