@@ -39,7 +39,8 @@ export function startBridge(engine: CopierEngine, port = 7878): void {
             return;
           }
           const result = await engine.ingestToken(token);
-          if (result.ok) log.info(`Token refreshed from extension → ${result.login}.`);
+          if (result.ok && result.acted) log.info(`Login activated from extension → ${result.login}.`);
+          else if (!result.ok) log.debug(`Token rejected: ${result.error}`);
           res.writeHead(result.ok ? 200 : 409, { "Content-Type": "application/json" });
           res.end(JSON.stringify(result));
         } catch (err) {

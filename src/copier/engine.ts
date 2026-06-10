@@ -403,14 +403,14 @@ export class CopierEngine {
   // --- browser-extension bridge --------------------------------------------
 
   /** Route a token pushed by the extension to the login it belongs to. */
-  async ingestToken(token: string): Promise<{ ok: boolean; login?: string; error?: string }> {
+  async ingestToken(token: string): Promise<{ ok: boolean; login?: string; acted?: boolean; error?: string }> {
     const sub = jwtClaims(token).sub;
     if (!sub) return { ok: false, error: "token has no sub claim" };
     const client = [...this.clients.values()].find((c) => c.sub === sub);
     if (!client) return { ok: false, error: `no configured login for userId ${sub}` };
     try {
-      await client.acceptToken(token);
-      return { ok: true, login: client.label };
+      const acted = await client.acceptToken(token);
+      return { ok: true, login: client.label, acted };
     } catch (err) {
       return { ok: false, error: String(err) };
     }

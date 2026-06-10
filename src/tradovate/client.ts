@@ -117,15 +117,21 @@ export class TradovateClient {
   }
 
   /** Accept a fresh token pushed in from outside (the browser extension):
-   *  refresh the session in place, or revive the connection if it had died. */
-  async acceptToken(token: string): Promise<void> {
-    this.opts.accessToken = token; // freshest seed for authenticate()
+   *  refresh the session in place, or revive the connection if it had died.
+   *  Returns true only if it actually (re)authenticated. */
+  async acceptToken(token: string): Promise<boolean> {
+    this.opts.accessToken = token; // remember the freshest seed
+    const validMs = this.token ? new Date(this.token.expirationTime).getTime() - Date.now() : 0;
+    // Already connected with plenty of validity left? Don't hammer /renew on
+    // every page request — just keep the seed for the next real re-auth.
+    if (this.isReady && validMs > 10 * 60_000) return false;
     this.closing = false;
     await this.authenticate(); // validates + caches + reschedules renewal
     const rs = this.ws?.readyState;
     if (rs !== WebSocket.OPEN && rs !== WebSocket.CONNECTING) {
       await this.connectSocket();
     }
+    return true;
   }
 
   /** Stable key for the on-disk token cache (per login per network). */
