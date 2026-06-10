@@ -75,6 +75,10 @@
   .arm.off .arm-btn { background:var(--green); color:#06121d; }
   .arm.on  .arm-btn { background:transparent; color:var(--red); border-color:rgba(251,113,133,.45); }
   .arm-btn:hover { opacity:.85; }
+  .mk-master { font-family:var(--mono); font-size:11px; font-weight:700; color:var(--accent); background:rgba(108,99,255,.1); border:1px solid rgba(108,99,255,.3); padding:5px 11px; border-radius:6px; cursor:pointer; flex:none; }
+  .mk-master:hover { background:rgba(108,99,255,.2); }
+  .toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(20px); background:var(--card2); border:1px solid var(--border); color:var(--txt); font-family:var(--mono); font-size:13px; padding:11px 18px; border-radius:10px; opacity:0; pointer-events:none; transition:opacity .25s, transform .25s; z-index:50; box-shadow:0 8px 30px rgba(0,0,0,.5); }
+  .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
 
   /* live order log */
   .livedot { font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.08em; padding:2px 8px; border-radius:5px; }
@@ -151,6 +155,7 @@
           <div class="meta">${a.account ? esc(a.account) : '— compte non résolu —'}${a.accountId ? ' · #' + a.accountId : ''}</div>
           ${posStrip(a.positions)}
         </div>
+        ${!isMaster && a.account ? `<button class="mk-master" onclick="setMaster('${esc(a.account)}')" title="Définir comme compte maître">↑ maître</button>` : ''}
         ${!isMaster ? `<span class="mult">×${a.multiplier}</span>` : ''}
         <span class="state ${on ? 'on' : 'off'}">${on ? '● connecté' : '○ déconnecté'}</span>
       </div>`;
@@ -188,6 +193,23 @@
     } catch (_) { /* server down — the 2s poll will resync */ }
   }
   window.setArmed = setArmed;
+
+  function showToast(msg) {
+    let t = document.getElementById('toast');
+    if (!t) { t = document.createElement('div'); t.id = 'toast'; t.className = 'toast'; document.body.appendChild(t); }
+    t.textContent = msg; t.classList.add('show');
+    clearTimeout(t._timer); t._timer = setTimeout(() => t.classList.remove('show'), 4500);
+  }
+
+  async function setMaster(spec) {
+    if (!window.confirm('Définir ' + spec + ' comme compte MAÎTRE ?\n\nLe copieur va redémarrer — fais-le à plat (sans position ouverte).')) return;
+    try {
+      const r = await fetch('/api/master', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ masterSpec: spec }) });
+      const d = await r.json().catch(() => ({}));
+      showToast(d.ok ? ('Maître → ' + spec + ' · redémarrage du copieur…') : ('Échec : ' + (d.error || 'erreur')));
+    } catch (_) { showToast('Serveur injoignable'); }
+  }
+  window.setMaster = setMaster;
 
   function renderTop(s) {
     const followers = s.followers || [];

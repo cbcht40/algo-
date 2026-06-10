@@ -1,5 +1,6 @@
-import type { AccountConfig, Config } from "../config";
+import type { AccountConfig, Config, FollowerConfig } from "../config";
 import type { LicenseGate } from "../license";
+import { resolveRoster, isKnownSpec, setMasterSpec } from "../roster";
 import { logger } from "../logger";
 import { TradovateClient, type ClientOptions } from "../tradovate/client";
 import type { Account, Order, OrderVersion, PropsEvent } from "../tradovate/types";
@@ -71,6 +72,10 @@ export class CopierEngine {
   private gate?: LicenseGate;
   /** User-controlled arm switch — nothing is copied until the user arms it. */
   private active = false;
+  /** Effective roster for this run (which account is master vs followers). */
+  private rosterMaster!: AccountConfig;
+  private rosterFollowers: FollowerConfig[] = [];
+  private masterSpec = "";
 
   constructor(cfg: Config) {
     this.cfg = cfg;
@@ -89,6 +94,15 @@ export class CopierEngine {
   }
   get isActive(): boolean {
     return this.active;
+  }
+
+  /** Choose which account is the master. Persisted; applied on the next restart
+   *  (the Electron app restarts the copier automatically when this changes). */
+  requestMaster(spec: string): { ok: boolean; error?: string; masterSpec?: string } {
+    if (!spec || !isKnownSpec(this.cfg, spec)) return { ok: false, error: "compte inconnu" };
+    setMasterSpec(spec);
+    log.info(`Changement de maître demandé → ${spec} (appliqué au redémarrage).`);
+    return { ok: true, masterSpec: spec };
   }
 
   // One websocket per distinct login (token, or name+cid); accounts on the same
@@ -141,9 +155,15 @@ export class CopierEngine {
   }
 
   async start(): Promise<void> {
-    this.masterClient = this.getClient(this.cfg.master);
+    const roster = resolveRoster(this.cfg);
+    this.rosterMaster = roster.master;
+    this.rosterFollowers = roster.followers;
+    this.masterSpec = roster.masterSpec;
+    log.info(`Master selected: ${this.rosterMaster.label}`);
 
-    for (const f of this.cfg.followers) {
+    this.masterClient = this.getClient(this.rosterMaster);
+
+    for (const f of this.rosterFollowers) {
       const client = this.getClient(f);
       this.followers.push({
         label: f.label,
@@ -221,9 +241,9 @@ export class CopierEngine {
       try {
         const m = this.pick(
           client,
-          this.cfg.master.accountId,
-          this.cfg.master.accountSpec,
-          this.cfg.master.label,
+          this.rosterMaster.accountId,
+          this.rosterMaster.accountSpec,
+          this.rosterMaster.label,
         );
         this.masterAccountId = m.id;
         this.masterAccountSpec = m.name;
@@ -240,7 +260,7 @@ export class CopierEngine {
       const f = this.followers[i]!;
       if (f.client !== client) continue;
       try {
-        const fc = this.cfg.followers[i]!;
+        const fc = this.rosterFollowers[i]!;
         const acct = this.pick(client, fc.accountId, fc.accountSpec, f.label);
         f.accountId = acct.id;
         f.accountSpec = acct.name;
@@ -550,9 +570,10 @@ export class CopierEngine {
       environment: this.cfg.environment,
       dryRun: this.cfg.dryRun,
       active: this.active,
+      masterSpec: this.masterSpec || null,
       license: this.gate?.status() ?? null,
       master: {
-        label: this.cfg.master.label,
+        label: this.rosterMaster?.label ?? this.cfg.master.label,
         account: this.masterAccountSpec || null,
         accountId: this.masterAccountId || null,
         connected: this.masterClient?.isReady ?? false,

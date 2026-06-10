@@ -59,6 +59,24 @@ export function startDashboard(engine: CopierEngine, port = 7879): void {
       return;
     }
 
+    // Choose the master account (persisted; applied on the next copier restart).
+    if (req.method === "POST" && req.url?.startsWith("/api/master")) {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        let spec = "";
+        try {
+          spec = String(JSON.parse(body || "{}").masterSpec || "");
+        } catch {
+          /* malformed body */
+        }
+        const result = engine.requestMaster(spec);
+        res.writeHead(result.ok ? 200 : 400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(result));
+      });
+      return;
+    }
+
     if (req.method === "GET" && req.url?.startsWith("/api/events")) {
       res.writeHead(200, {
         "Content-Type": "text/event-stream",

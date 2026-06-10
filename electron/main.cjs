@@ -5,13 +5,17 @@ const { app, BrowserWindow, shell } = require('electron')
 const { spawn } = require('node:child_process')
 const path = require('node:path')
 const http = require('node:http')
+const fs = require('node:fs')
 
 const ROOT = path.join(__dirname, '..')
 const PORT = Number(process.env.DASHBOARD_PORT) || 7879
 const DASH_URL = `http://127.0.0.1:${PORT}`
+const MASTER_FILE = path.join(ROOT, '.copier-master.json')
 
 let copier = null
 let win = null
+let quitting = false
+let restarting = false
 
 function dashboardUp() {
   return new Promise((resolve) => {
@@ -51,6 +55,35 @@ function startCopier() {
     console.log(`[electron] copier exited (${code})`)
   })
   copier.on('error', (err) => console.error('[electron] failed to start copier:', err))
+}
+
+// Restart the copier WE started (e.g. after the user picked a new master): kill
+// the child, respawn it (it re-reads the chosen master), then reload the window.
+function restartCopier() {
+  if (!copier || restarting || quitting) return
+  restarting = true
+  const old = copier
+  copier = null
+  if (win && !win.isDestroyed()) win.loadURL(LOADING_HTML)
+  old.once('exit', async () => {
+    restarting = false
+    if (quitting) return
+    startCopier()
+    const ok = await waitForDashboard()
+    if (win && !win.isDestroyed()) win.loadURL(ok ? DASH_URL : ERROR_HTML)
+  })
+  old.kill()
+}
+
+// The dashboard writes .copier-master.json when the user picks a new master.
+function watchMaster() {
+  try {
+    fs.watchFile(MASTER_FILE, { interval: 1000 }, (curr, prev) => {
+      if (curr.mtimeMs !== prev.mtimeMs) restartCopier()
+    })
+  } catch (err) {
+    console.error('[electron] cannot watch master file:', err)
+  }
 }
 
 const LOADING_HTML =
@@ -99,6 +132,7 @@ app.whenReady().then(async () => {
   // Reuse an already-running copier (e.g. the launchd service); else start one.
   if (!(await dashboardUp())) startCopier()
   await createWindow()
+  watchMaster()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
@@ -110,6 +144,7 @@ app.on('window-all-closed', () => {
 })
 
 app.on('before-quit', () => {
+  quitting = true
   if (copier) {
     copier.kill()
     copier = null
