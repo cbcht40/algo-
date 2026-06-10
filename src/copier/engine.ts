@@ -70,7 +70,9 @@ export class CopierEngine {
     let opts: ClientOptions;
     if (auth.mode === "token") {
       const token = acct.accessToken ?? auth.accessToken!;
-      key = `token|${environment}|${token.slice(0, 24)}`;
+      // Key on the FULL token: JWTs from the same issuer share an identical
+      // header prefix, so a sliced key would collapse distinct logins into one.
+      key = `token|${environment}|${token}`;
       opts = { ...common, accessToken: token };
     } else {
       key = `apikey|${environment}|${acct.name}|${acct.cid}`;
@@ -120,16 +122,37 @@ export class CopierEngine {
       const accts = client.accounts;
       const first = accts[0];
       if (!first) throw new Error(`[${label}] login has no trading accounts.`);
-      let acct: Account = first;
-      if (wantId && wantId > 0) acct = accts.find((a) => a.id === wantId) ?? acct;
-      else if (wantSpec) acct = accts.find((a) => a.name === wantSpec) ?? acct;
-      if (accts.length > 1 && !wantId && !wantSpec) {
+      const available = () => accts.map((a) => `${a.name}#${a.id}`).join(", ");
+      // An explicitly requested account MUST exist on this login. Falling back
+      // to "some other account" silently is how orders end up duplicated on the
+      // wrong account — fail loudly instead.
+      if (wantId && wantId > 0) {
+        const acct = accts.find((a) => a.id === wantId);
+        if (!acct) {
+          throw new Error(
+            `[${label}] accountId ${wantId} not found on this login (has: ${available()}). ` +
+              `Wrong token for this account?`,
+          );
+        }
+        return acct;
+      }
+      if (wantSpec) {
+        const acct = accts.find((a) => a.name === wantSpec);
+        if (!acct) {
+          throw new Error(
+            `[${label}] account "${wantSpec}" not found on this login (has: ${available()}). ` +
+              `Wrong token for this account?`,
+          );
+        }
+        return acct;
+      }
+      if (accts.length > 1) {
         log.warn(
-          `[${label}] login has ${accts.length} accounts; defaulting to ${acct.name}#${acct.id}. ` +
+          `[${label}] login has ${accts.length} accounts; defaulting to ${first.name}#${first.id}. ` +
             `Set accountId/accountSpec in config to be explicit.`,
         );
       }
-      return acct;
+      return first;
     };
 
     const mAcct = pick(this.masterClient, this.cfg.master.accountId, this.cfg.master.accountSpec, this.cfg.master.label);
