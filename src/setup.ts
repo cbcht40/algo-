@@ -1,5 +1,5 @@
 // Onboarding / setup server. Runs when there's no config yet (fresh install):
-// the user pastes their Edge license, the Copilink extension pushes session
+// the user pastes their Edge license, the Let Trade Copieur extension pushes session
 // tokens over the same 127.0.0.1:7878 bridge, we DISCOVER each login's accounts,
 // the user picks the master, and we write config.json — then the process exits so
 // the Electron app (watching config.json) restarts into the copier. No terminal.
@@ -17,7 +17,7 @@ import type { Environment } from "./tradovate/types";
 const log = logger("setup");
 const PAGE = readFileSync(new URL("./onboarding.html", import.meta.url), "utf8");
 
-// The Copilink extension folder ships next to the bundle (one level up from src/
+// The Let Trade Copieur extension folder ships next to the bundle (one level up from src/
 // in dev, from build/ when packaged). Revealed in the file manager so the user
 // can "Load unpacked" it into Chrome.
 const EXT_DIR = (() => {
@@ -93,7 +93,7 @@ export function startSetup(opts: SetupOptions): void {
     }
   }
 
-  // --- bridge (7878): the Copilink extension pushes session tokens here ---
+  // --- bridge (7878): the Let Trade Copieur extension pushes session tokens here ---
   const bridge = createServer((req, res) => {
     res.setHeader("Access-Control-Allow-Origin", "*");
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");

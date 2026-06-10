@@ -43,7 +43,7 @@ async function main() {
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
-  // Bring the bridge up first so the Copilink extension can feed fresh tokens
+  // Bring the bridge up first so the Let Trade Copieur extension can feed fresh tokens
   // even while logins connect — or revive ones whose config token had expired.
   if (process.env.BRIDGE !== "off") {
     try {

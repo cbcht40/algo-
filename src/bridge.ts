@@ -58,6 +58,6 @@ export function startBridge(engine: CopierEngine, port = 7878): void {
   // A busy port (e.g. a second copier) shouldn't take the whole app down.
   server.on("error", (err) => log.warn(`Extension bridge disabled: ${String(err)}`));
   server.listen(port, "127.0.0.1", () =>
-    log.info(`Extension bridge listening on http://127.0.0.1:${port} (Copilink)`),
+    log.info(`Extension bridge listening on http://127.0.0.1:${port} (Let Trade Copieur)`),
   );
 }

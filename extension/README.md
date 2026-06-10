@@ -1,4 +1,4 @@
-# Copilink — extension navigateur
+# Let Trade Copieur — extension navigateur
 
 Capte automatiquement le token de ta session Tradovate et l'envoie au copieur
 local. **Plus jamais de copier-coller de token.**
@@ -12,7 +12,7 @@ local. **Plus jamais de copier-coller de token.**
    Si le copieur était éteint, elle réessaie toute seule chaque minute.
 
 > Après une mise à jour de l'extension : sur `chrome://extensions`, clique
-> l'icône **↻ recharger** de Copilink, **puis recharge l'onglet Tradovate**.
+> l'icône **↻ recharger** de Let Trade Copieur, **puis recharge l'onglet Tradovate**.
 
 > C'est exactement ce que tu faisais à la main dans DevTools — automatisé. Aucun
 > mot de passe, aucune clé : juste le token de ta session déjà ouverte.

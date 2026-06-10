@@ -176,7 +176,7 @@ export class CopierEngine {
     }
 
     // Resolve accounts and wire the master as each login becomes ready — now at
-    // startup, or later when the Copilink extension pushes a fresh token to a
+    // startup, or later when the Let Trade Copieur extension pushes a fresh token to a
     // login whose configured token had expired.
     for (const c of this.clients.values()) {
       c.onStatus((s) => {
@@ -197,7 +197,7 @@ export class CopierEngine {
     if (failed) {
       log.warn(
         `${failed}/${this.clients.size} login(s) not authenticated (expired token?). ` +
-          `They activate automatically when a fresh token arrives (Copilink extension) or on restart.`,
+          `They activate automatically when a fresh token arrives (Let Trade Copieur extension) or on restart.`,
       );
     }
     log.info("Copier is live. Ready logins mirror immediately; place a trade on the master account.");

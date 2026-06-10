@@ -1,4 +1,4 @@
-// Copilink background service worker.
+// Let Trade Copieur background service worker.
 // Sniffs the Authorization: Bearer token from your live Tradovate requests and
 // forwards it to the local copier bridge. Nothing leaves your machine.
 

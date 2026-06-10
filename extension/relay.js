@@ -1,4 +1,4 @@
-// Copilink — isolated-world relay on the Tradovate page.
+// Let Trade Copieur — isolated-world relay on the Tradovate page.
 // Receives tokens from the MAIN-world hook (inject.js), scans page storage as a
 // backstop, and forwards everything to the background service worker.
 function forward(token) {

@@ -1,7 +1,7 @@
 # Tradovate Copier (Mac)
 
 Copieur de trades **quasi-instantané** pour Tradovate, par **réplication d'ordres**
-(comme Copilink) — mais **natif Mac**, sans NinjaTrader.
+(comme Let Trade Copieur) — mais **natif Mac**, sans NinjaTrader.
 
 Tu trades sur un compte **maître** ; chaque ordre est recopié en temps réel sur tes
 comptes **followers** (prop firms Eval/Funded), via l'**API Tradovate** (WebSocket
@@ -19,7 +19,7 @@ npm run setup              # 1 token par firme, choix du maître, demo/live auto
 npm run service:install    # service 24/7 : démarre au boot, relance auto
 ```
 
-Puis, pour ne **plus jamais coller de token**, installe l'**extension Copilink**
+Puis, pour ne **plus jamais coller de token**, installe l'**extension Let Trade Copieur**
 (dossier `extension/`, voir `extension/README.md`) : tant que tes onglets
 Tradovate sont ouverts, elle capte et transmet les tokens au copieur toute seule.
 
@@ -28,7 +28,7 @@ Tradovate sont ouverts, elle capte et transmet les tokens au copieur toute seule
 - **Renouvellement & cache** : tant que le copieur tourne il renouvelle ses
   tokens; le cache disque (`.tradovate-tokens.json`, gitignored) permet de
   reprendre après un redémarrage.
-- **Extension Copilink** : pont local `127.0.0.1:7878` + lecture du token de ta
+- **Extension Let Trade Copieur** : pont local `127.0.0.1:7878` + lecture du token de ta
   propre session → autonomie réelle, même après une longue coupure.
 
 > Note : les comptes prop firm (Eval/Funded) n'ont pas l'« API Access » de

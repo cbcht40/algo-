@@ -13,7 +13,7 @@ const DASH_URL = `http://127.0.0.1:${PORT}`
 
 // Pin the app name so the user-data dir is stable + branded (otherwise Electron
 // derives it from the package "name", e.g. "tradovate-copier").
-app.setName('Copieur Tradovate')
+app.setName('Let Trade Copieur')
 
 // Packaged: config + caches live in the writable user-data dir (the app bundle is
 // read-only). Dev: they live in the project root.
@@ -147,7 +147,7 @@ async function createWindow() {
     minWidth: 760,
     minHeight: 600,
     backgroundColor: '#0a0a10',
-    title: 'Copieur Tradovate',
+    title: 'Let Trade Copieur',
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   })
   win.webContents.setWindowOpenHandler(({ url }) => {

@@ -1,4 +1,4 @@
-// Copilink — MAIN-world hook injected into the Tradovate page.
+// Let Trade Copieur — MAIN-world hook injected into the Tradovate page.
 // Wraps the app's own network primitives to grab the Bearer token wherever it
 // appears (REST headers or the WebSocket "authorize" frame), then hands it to
 // the isolated relay via window.postMessage. Runs at document_start so it wraps

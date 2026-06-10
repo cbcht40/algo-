@@ -37,7 +37,8 @@
   },
   "build": {
     "appId": "com.lettradejournal.copier",
-    "productName": "Copieur Tradovate",
+    "productName": "Let Trade Copieur",
+    "artifactName": "Let-Trade-Copieur-${version}-${arch}.${ext}",
     "asar": false,
     "files": [
       "electron/**",
@@ -49,8 +50,9 @@
     "mac": {
       "target": "dmg",
       "category": "public.app-category.finance",
-      "identity": null
+      "identity": null,
+      "icon": "icon.png"
     },
-    "win": { "target": "nsis" }
+    "win": { "target": "nsis", "icon": "icon.png" }
   }
 }
