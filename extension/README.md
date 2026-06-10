@@ -5,10 +5,14 @@ local. **Plus jamais de copier-coller de token.**
 
 ## Comment ça marche
 1. Le copieur (`npm start`) ouvre un petit pont local sur `http://127.0.0.1:7878`.
-2. L'extension lit le `Authorization: Bearer …` de **tes propres requêtes**
-   Tradovate (rien ne sort de ta machine) et le pousse au copieur.
-3. Quand Tradovate renouvelle le token, l'extension le renvoie automatiquement.
+2. Sur la page Tradovate, un script lit le token **directement** (hook de
+   `fetch`/`WebSocket` + scan du stockage local) — fiable même quand l'app est au
+   repos. Rien ne sort de ta machine.
+3. L'extension pousse le token au copieur, et renvoie chaque renouvellement.
    Si le copieur était éteint, elle réessaie toute seule chaque minute.
+
+> Après une mise à jour de l'extension : sur `chrome://extensions`, clique
+> l'icône **↻ recharger** de Copilink, **puis recharge l'onglet Tradovate**.
 
 > C'est exactement ce que tu faisais à la main dans DevTools — automatisé. Aucun
 > mot de passe, aucune clé : juste le token de ta session déjà ouverte.

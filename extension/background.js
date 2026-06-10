@@ -96,8 +96,13 @@ chrome.alarms.onAlarm.addListener(async (a) => {
   }
 });
 
-// 3) Popup messages: status + manual resend.
+// 3) Popup + content-script messages.
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
+  // Token forwarded by the page relay (content script) — the reliable path.
+  if (msg && msg.type === "token" && msg.token) {
+    onToken(msg.token);
+    return; // no async reply needed
+  }
   if (msg === "resend") {
     Promise.all(Object.keys(tokens).map(send)).then(() => reply({ ok: true }));
     return true; // async reply
