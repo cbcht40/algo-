@@ -160,6 +160,23 @@ export class CopierEngine {
   private onMasterEntity(ev: PropsEvent): void {
     const affected = this.book.apply(ev);
 
+    // Live visibility: log every incoming entity event and whether it belongs to
+    // the master account. Makes "I placed an order and nothing happened" diagnosable.
+    if (ev.eventType !== "Snapshot") {
+      const e = ev.entity as any;
+      const acct = e?.accountId;
+      log.debug(
+        `event ${ev.entityType}/${ev.eventType}` +
+          (acct !== undefined ? ` acct=${acct}` : "") +
+          (e?.ordStatus ? ` status=${e.ordStatus}` : "") +
+          (e?.id !== undefined ? ` id=${e.id}` : "") +
+          (e?.orderId !== undefined ? ` orderId=${e.orderId}` : "") +
+          (acct !== undefined && acct !== this.masterAccountId
+            ? `  ← NOT master(${this.masterAccountId}), ignored`
+            : ""),
+      );
+    }
+
     // Snapshot items (initial sync or post-reconnect resync) are existing state,
     // never live actions — record orders as known so we never replicate them.
     if (ev.eventType === "Snapshot") {

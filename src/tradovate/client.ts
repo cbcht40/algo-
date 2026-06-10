@@ -274,7 +274,11 @@ export class TradovateClient {
     }
     if (msg.e === "shutdown") {
       this.log.warn("Server requested shutdown of this socket.");
+      return;
     }
+    // Any other event channel (md, chart, clock…) — surface it so we notice if
+    // order updates ever arrive somewhere we don't expect.
+    if (msg.e) this.log.debug(`event channel=${msg.e} (not handled)`);
   }
 
   private emitEntity(ev: PropsEvent): void {
