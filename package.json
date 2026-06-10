@@ -16,7 +16,8 @@
     "service:logs": "bash tools/service.sh logs",
     "service:restart": "bash tools/service.sh restart",
     "typecheck": "tsc --noEmit",
-    "build": "tsc"
+    "build": "tsc",
+    "app": "electron electron/main.cjs"
   },
   "dependencies": {
     "ws": "^8.18.0"
@@ -24,6 +25,7 @@
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@types/ws": "^8.5.10",
+    "electron": "^42.4.0",
     "tsx": "^4.16.0",
     "typescript": "^5.5.0"
   }
