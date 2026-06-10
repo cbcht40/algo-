@@ -5,9 +5,10 @@
 // the Electron app (watching config.json) restarts into the copier. No terminal.
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, cpSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { homedir } from "node:os";
 import { logger } from "./logger";
 import { verifyLicense } from "./license";
 import { TradovateClient } from "./tradovate/client";
@@ -28,14 +29,27 @@ const EXT_DIR = (() => {
   }
 })();
 
-function revealExtension(): void {
-  if (!EXT_DIR) return;
-  const cmd = process.platform === "win32" ? "explorer" : process.platform === "darwin" ? "open" : "xdg-open";
+function revealExtension(): string {
+  if (!EXT_DIR) return "";
+  // Copy the bundled extension to an easy-to-find folder (Downloads) and reveal it,
+  // so the user can pick it directly in Chrome's "Load unpacked" — the in-bundle
+  // path is buried inside the .app and awkward to select.
+  let target = EXT_DIR;
+  const dest = resolve(homedir(), "Downloads", "Let-Trade-Copieur-Extension");
   try {
-    spawn(cmd, [EXT_DIR], { detached: true, stdio: "ignore" }).unref();
+    cpSync(EXT_DIR, dest, { recursive: true });
+    target = dest;
   } catch (err) {
-    log.warn(`Impossible d'ouvrir le dossier de l'extension : ${String(err)}`);
+    log.warn(`Copie de l'extension échouée (j'ouvre le dossier d'origine) : ${String(err)}`);
   }
+  try {
+    if (process.platform === "darwin") spawn("open", ["-R", target], { detached: true, stdio: "ignore" }).unref();
+    else if (process.platform === "win32") spawn("explorer", [target], { detached: true, stdio: "ignore" }).unref();
+    else spawn("xdg-open", [target], { detached: true, stdio: "ignore" }).unref();
+  } catch (err) {
+    log.warn(`Impossible d'ouvrir le dossier : ${String(err)}`);
+  }
+  return target;
 }
 
 interface DiscoveredLogin {
@@ -169,8 +183,8 @@ export function startSetup(opts: SetupOptions): void {
     if (req.method === "GET" && req.url?.startsWith("/api/setup")) return void json(200, state());
 
     if (req.method === "POST" && req.url?.startsWith("/api/extension")) {
-      revealExtension();
-      return void json(200, { ok: true, path: EXT_DIR });
+      const extPath = revealExtension();
+      return void json(200, { ok: true, path: extPath });
     }
 
     if (req.method === "POST" && req.url?.startsWith("/api/license")) {
