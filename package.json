@@ -42,6 +42,7 @@
     "files": [
       "electron/**",
       "build/**",
+      "extension/**",
       "package.json"
     ],
     "directories": { "output": "release" },

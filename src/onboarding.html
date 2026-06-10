@@ -67,8 +67,13 @@
     <div class="step locked" id="s2">
       <div class="num">Étape 2 — Connecte Tradovate</div>
       <h2>Branche tes comptes</h2>
-      <p>Installe l'<b>extension Copilink</b> dans Chrome, puis <b>connecte-toi sur Tradovate</b> : elle envoie tes comptes ici automatiquement. Tes comptes apparaissent dès qu'ils sont détectés.</p>
-      <div class="msg wait" id="s2msg"><span class="spin"></span>En attente de tes comptes…</div>
+      <p><b>1.</b> Installe l'<b>extension Copilink</b> (bouton ci-dessous). &nbsp;<b>2.</b> Connecte-toi sur <b>Tradovate</b> dans Chrome → tes comptes apparaissent ici tout seuls.</p>
+      <button class="primary" onclick="openExt()">📦 Installer l'extension</button>
+      <div class="hint" id="extHint" style="display:none; margin-top:12px; line-height:1.8">
+        Le dossier de l'extension vient de s'ouvrir. Dans Chrome :<br>
+        ① va sur <b>chrome://extensions</b> &nbsp; ② active <b>« Mode développeur »</b> (en haut à droite) &nbsp; ③ clique <b>« Charger l'extension non empaquetée »</b> et choisis ce dossier.
+      </div>
+      <div class="msg wait" id="s2msg" style="margin-top:14px"><span class="spin"></span>En attente de tes comptes…</div>
       <div class="accts" id="accts"></div>
     </div>
 
@@ -107,6 +112,12 @@
     } catch { $('s1msg').className = 'msg err'; $('s1msg').textContent = 'Serveur injoignable.'; }
     $('checkBtn').disabled = false;
   }
+
+  async function openExt() {
+    try { await fetch('/api/extension', { method: 'POST' }); } catch (_) {}
+    $('extHint').style.display = 'block';
+  }
+  window.openExt = openExt;
 
   function renderAccounts() {
     if (!accounts.length) return;

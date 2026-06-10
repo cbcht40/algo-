@@ -4,8 +4,10 @@
 // the user picks the master, and we write config.json — then the process exits so
 // the Electron app (watching config.json) restarts into the copier. No terminal.
 import { createServer } from "node:http";
+import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { logger } from "./logger";
 import { verifyLicense } from "./license";
 import { TradovateClient } from "./tradovate/client";
@@ -14,6 +16,27 @@ import type { Environment } from "./tradovate/types";
 
 const log = logger("setup");
 const PAGE = readFileSync(new URL("./onboarding.html", import.meta.url), "utf8");
+
+// The Copilink extension folder ships next to the bundle (one level up from src/
+// in dev, from build/ when packaged). Revealed in the file manager so the user
+// can "Load unpacked" it into Chrome.
+const EXT_DIR = (() => {
+  try {
+    return fileURLToPath(new URL("../extension", import.meta.url));
+  } catch {
+    return "";
+  }
+})();
+
+function revealExtension(): void {
+  if (!EXT_DIR) return;
+  const cmd = process.platform === "win32" ? "explorer" : process.platform === "darwin" ? "open" : "xdg-open";
+  try {
+    spawn(cmd, [EXT_DIR], { detached: true, stdio: "ignore" }).unref();
+  } catch (err) {
+    log.warn(`Impossible d'ouvrir le dossier de l'extension : ${String(err)}`);
+  }
+}
 
 interface DiscoveredLogin {
   sub: string;
@@ -144,6 +167,11 @@ export function startSetup(opts: SetupOptions): void {
     // Let the Electron "wait for dashboard" probe succeed in setup mode too.
     if (req.method === "GET" && req.url?.startsWith("/api/state")) return void json(200, { setup: true });
     if (req.method === "GET" && req.url?.startsWith("/api/setup")) return void json(200, state());
+
+    if (req.method === "POST" && req.url?.startsWith("/api/extension")) {
+      revealExtension();
+      return void json(200, { ok: true, path: EXT_DIR });
+    }
 
     if (req.method === "POST" && req.url?.startsWith("/api/license")) {
       let body = "";
