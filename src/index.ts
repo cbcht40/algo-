@@ -27,9 +27,8 @@ async function main() {
   process.on("SIGINT", () => void shutdown("SIGINT"));
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
-  await engine.start();
-
-  // Local bridge for the browser extension (Copilink) — never fatal.
+  // Bring the bridge up first so the Copilink extension can feed fresh tokens
+  // even while logins connect — or revive ones whose config token had expired.
   if (process.env.BRIDGE !== "off") {
     try {
       startBridge(engine, Number(process.env.BRIDGE_PORT) || 7878);
@@ -37,6 +36,8 @@ async function main() {
       log.warn(`Could not start extension bridge: ${String(err)}`);
     }
   }
+
+  await engine.start();
 }
 
 main().catch((err) => {

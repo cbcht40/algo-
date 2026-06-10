@@ -44,6 +44,8 @@ export class CopierEngine {
   private mirrors = new Map<number, MirrorRecord>();
   /** master orders we've already decided on (mirrored or knowingly ignored) */
   private handled = new Set<number>();
+  /** follower indices whose account is resolved (so re-syncs don't re-log) */
+  private resolvedFollowers = new Set<number>();
 
   constructor(cfg: Config) {
     this.cfg = cfg;
@@ -113,71 +115,100 @@ export class CopierEngine {
       });
     }
 
-    // Connect every distinct login in parallel.
+    // Resolve accounts and wire the master as each login becomes ready — now at
+    // startup, or later when the Copilink extension pushes a fresh token to a
+    // login whose configured token had expired.
+    for (const c of this.clients.values()) {
+      c.onStatus((s) => {
+        if (s === "ready") this.onLoginReady(c);
+      });
+    }
+
     log.info(
       `Starting on ${this.cfg.environment.toUpperCase()} — ` +
         `${this.clients.size} login(s), ${this.followers.length} follower account(s)` +
         (this.cfg.dryRun ? " [DRY-RUN]" : ""),
     );
-    await Promise.all([...this.clients.values()].map((c) => c.start()));
 
-    this.resolveAccounts();
-    this.checkStartFlat();
-    this.wireMaster();
-
-    log.info("Copier is live. Place a trade on the master account to replicate it.");
+    // A dead/expired token must NOT take the whole copier down: the other logins
+    // keep working, and the failed one revives the moment a fresh token arrives.
+    const results = await Promise.allSettled([...this.clients.values()].map((c) => c.start()));
+    const failed = results.filter((r) => r.status === "rejected").length;
+    if (failed) {
+      log.warn(
+        `${failed}/${this.clients.size} login(s) not authenticated (expired token?). ` +
+          `They activate automatically when a fresh token arrives (Copilink extension) or on restart.`,
+      );
+    }
+    log.info("Copier is live. Ready logins mirror immediately; place a trade on the master account.");
   }
 
-  private resolveAccounts(): void {
-    const pick = (client: TradovateClient, wantId?: number, wantSpec?: string, label = "") => {
-      const accts = client.accounts;
-      const first = accts[0];
-      if (!first) throw new Error(`[${label}] login has no trading accounts.`);
-      const available = () => accts.map((a) => `${a.name}#${a.id}`).join(", ");
-      // An explicitly requested account MUST exist on this login. Falling back
-      // to "some other account" silently is how orders end up duplicated on the
-      // wrong account — fail loudly instead.
-      if (wantId && wantId > 0) {
-        const acct = accts.find((a) => a.id === wantId);
-        if (!acct) {
-          throw new Error(
-            `[${label}] accountId ${wantId} not found on this login (has: ${available()}). ` +
-              `Wrong token for this account?`,
-          );
-        }
-        return acct;
-      }
-      if (wantSpec) {
-        const acct = accts.find((a) => a.name === wantSpec);
-        if (!acct) {
-          throw new Error(
-            `[${label}] account "${wantSpec}" not found on this login (has: ${available()}). ` +
-              `Wrong token for this account?`,
-          );
-        }
-        return acct;
-      }
-      if (accts.length > 1) {
-        log.warn(
-          `[${label}] login has ${accts.length} accounts; defaulting to ${first.name}#${first.id}. ` +
-            `Set accountId/accountSpec in config to be explicit.`,
-        );
-      }
-      return first;
-    };
+  /** Resolve the exact account behind a config entry on a given login. */
+  private pick(
+    client: TradovateClient,
+    wantId: number | undefined,
+    wantSpec: string | undefined,
+    label: string,
+  ): Account {
+    const accts = client.accounts;
+    const first = accts[0];
+    if (!first) throw new Error(`[${label}] login has no trading accounts.`);
+    const available = () => accts.map((a) => `${a.name}#${a.id}`).join(", ");
+    // An explicitly requested account MUST exist on this login — never fall back
+    // to "some other account" silently (that duplicates orders on the wrong one).
+    if (wantId && wantId > 0) {
+      const acct = accts.find((a) => a.id === wantId);
+      if (!acct) throw new Error(`[${label}] accountId ${wantId} not on this login (has: ${available()}).`);
+      return acct;
+    }
+    if (wantSpec) {
+      const acct = accts.find((a) => a.name === wantSpec);
+      if (!acct) throw new Error(`[${label}] account "${wantSpec}" not on this login (has: ${available()}).`);
+      return acct;
+    }
+    if (accts.length > 1) {
+      log.warn(
+        `[${label}] login has ${accts.length} accounts; defaulting to ${first.name}#${first.id}. ` +
+          `Set accountId/accountSpec to be explicit.`,
+      );
+    }
+    return first;
+  }
 
-    const mAcct = pick(this.masterClient, this.cfg.master.accountId, this.cfg.master.accountSpec, this.cfg.master.label);
-    this.masterAccountId = mAcct.id;
-    this.masterAccountSpec = mAcct.name;
-    log.info(`Master account: ${mAcct.name}#${mAcct.id}`);
+  /** Fired when a login finishes its sync (at startup, or after a token revive). */
+  private onLoginReady(client: TradovateClient): void {
+    if (client === this.masterClient && !this.masterAccountId) {
+      try {
+        const m = this.pick(
+          client,
+          this.cfg.master.accountId,
+          this.cfg.master.accountSpec,
+          this.cfg.master.label,
+        );
+        this.masterAccountId = m.id;
+        this.masterAccountSpec = m.name;
+        this.wireMaster();
+        this.checkStartFlat();
+        log.info(`Master account: ${m.name}#${m.id}`);
+      } catch (err) {
+        log.warn(`Master not resolved yet: ${String(err)}`);
+      }
+    }
 
     for (let i = 0; i < this.followers.length; i++) {
+      if (this.resolvedFollowers.has(i)) continue;
       const f = this.followers[i]!;
-      const fc = this.cfg.followers[i]!;
-      const acct = pick(f.client, fc.accountId, fc.accountSpec, f.label);
-      f.accountId = acct.id;
-      f.accountSpec = acct.name;
-      log.info(`Follower ${f.label}: ${acct.name}#${acct.id} (x${f.multiplier})`);
+      if (f.client !== client) continue;
+      try {
+        const fc = this.cfg.followers[i]!;
+        const acct = this.pick(client, fc.accountId, fc.accountSpec, f.label);
+        f.accountId = acct.id;
+        f.accountSpec = acct.name;
+        this.resolvedFollowers.add(i);
+        log.info(`Follower ${f.label}: ${acct.name}#${acct.id} (x${f.multiplier})`);
+      } catch (err) {
+        log.warn(`Follower ${f.label} not resolved: ${String(err)}`);
+      }
     }
   }
 
