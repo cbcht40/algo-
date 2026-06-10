@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header>
+    <div class="logo">↻</div>
+    <div>
+      <div class="title">Copilink</div>
+      <div class="subtitle">Tradovate → Copieur</div>
+    </div>
+  </header>
+
+  <section id="copier" class="card">
+    <span class="dot" id="copier-dot"></span>
+    <div class="card-text">
+      <div class="card-title" id="copier-title">Recherche du copieur…</div>
+      <div class="card-sub" id="copier-sub">http://127.0.0.1:7878</div>
+    </div>
+  </section>
+
+  <div class="logins-label">Comptes détectés</div>
+  <ul id="logins"><li class="empty" id="empty">Ouvre une session Tradovate pour capter un token…</li></ul>
+
+  <button id="resend">Renvoyer les tokens maintenant</button>
+  <div class="foot" id="foot">Garde tes onglets Tradovate ouverts — tout est automatique.</div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

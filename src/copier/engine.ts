@@ -2,6 +2,7 @@ import type { AccountConfig, Config } from "../config";
 import { logger } from "../logger";
 import { TradovateClient, type ClientOptions } from "../tradovate/client";
 import type { Account, Order, OrderVersion, PropsEvent } from "../tradovate/types";
+import { jwtClaims } from "../tradovate/tokenStore";
 import { MasterBook } from "./masterBook";
 
 const TERMINAL_CANCEL = new Set(["Canceled", "Cancelled", "Rejected", "Expired"]);
@@ -366,6 +367,32 @@ export class CopierEngine {
           }
         }),
     );
+  }
+
+  // --- browser-extension bridge --------------------------------------------
+
+  /** Route a token pushed by the extension to the login it belongs to. */
+  async ingestToken(token: string): Promise<{ ok: boolean; login?: string; error?: string }> {
+    const sub = jwtClaims(token).sub;
+    if (!sub) return { ok: false, error: "token has no sub claim" };
+    const client = [...this.clients.values()].find((c) => c.sub === sub);
+    if (!client) return { ok: false, error: `no configured login for userId ${sub}` };
+    try {
+      await client.acceptToken(token);
+      return { ok: true, login: client.label };
+    } catch (err) {
+      return { ok: false, error: String(err) };
+    }
+  }
+
+  /** Live snapshot for the extension popup. */
+  status(): Array<{ label: string; userId: number; ready: boolean; sub?: string }> {
+    return [...this.clients.values()].map((c) => ({
+      label: c.label,
+      userId: c.userId,
+      ready: c.isReady,
+      sub: c.sub,
+    }));
   }
 
   async stop(): Promise<void> {

@@ -15,18 +15,25 @@ persistant → latence minimale).
 ## 0. Mode autonome (recommandé) — calibre une fois, tourne tout seul
 
 ```bash
-npm run setup              # email + mot de passe par firme, choix du maître
-npm start                  # test au premier plan…
-npm run service:install    # …ou service 24/7 : démarre au boot, relance auto
+npm run setup              # 1 token par firme, choix du maître, demo/live auto
+npm run service:install    # service 24/7 : démarre au boot, relance auto
 ```
 
-- **Plus aucun token à coller** : le copieur se connecte par identifiants,
-  fabrique et **renouvelle ses tokens tout seul** (cache disque
-  `.tradovate-tokens.json`, gitignored).
+Puis, pour ne **plus jamais coller de token**, installe l'**extension Copilink**
+(dossier `extension/`, voir `extension/README.md`) : tant que tes onglets
+Tradovate sont ouverts, elle capte et transmet les tokens au copieur toute seule.
+
 - **Service macOS (launchd)** : démarre à l'allumage du Mac, se relance en cas
   de crash, logue dans `logs/copier.log` (`npm run service:logs`).
-- Si une firme refuse le login direct (captcha…), l'assistant accepte un
-  **token de session en secours** pour cette firme uniquement.
+- **Renouvellement & cache** : tant que le copieur tourne il renouvelle ses
+  tokens; le cache disque (`.tradovate-tokens.json`, gitignored) permet de
+  reprendre après un redémarrage.
+- **Extension Copilink** : pont local `127.0.0.1:7878` + lecture du token de ta
+  propre session → autonomie réelle, même après une longue coupure.
+
+> Note : les comptes prop firm (Eval/Funded) n'ont pas l'« API Access » de
+> Tradovate, donc **pas de login par mot de passe** : on réutilise le token de
+> session (collé une fois, ou fourni en continu par l'extension).
 
 ## 1. Deux modes de connexion
 

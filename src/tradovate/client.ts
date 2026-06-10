@@ -109,6 +109,25 @@ export class TradovateClient {
     await this.connectSocket();
   }
 
+  /** Identity of this login: the authenticated userId if known, otherwise the
+   *  `sub` of the configured token. Used to route extension-pushed tokens. */
+  get sub(): string | undefined {
+    if (this.userId) return String(this.userId);
+    return jwtClaims(this.opts.accessToken ?? "").sub || undefined;
+  }
+
+  /** Accept a fresh token pushed in from outside (the browser extension):
+   *  refresh the session in place, or revive the connection if it had died. */
+  async acceptToken(token: string): Promise<void> {
+    this.opts.accessToken = token; // freshest seed for authenticate()
+    this.closing = false;
+    await this.authenticate(); // validates + caches + reschedules renewal
+    const rs = this.ws?.readyState;
+    if (rs !== WebSocket.OPEN && rs !== WebSocket.CONNECTING) {
+      await this.connectSocket();
+    }
+  }
+
   /** Stable key for the on-disk token cache (per login per network). */
   private cacheKey(): string {
     if (this.opts.name) return `cred|${this.env}|${this.opts.name}`;

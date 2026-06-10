@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { loadConfig } from "./config";
 import { CopierEngine } from "./copier/engine";
+import { startBridge } from "./bridge";
 import { logger, setLogLevel } from "./logger";
 
 const log = logger("main");
@@ -27,6 +28,15 @@ async function main() {
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
   await engine.start();
+
+  // Local bridge for the browser extension (Copilink) — never fatal.
+  if (process.env.BRIDGE !== "off") {
+    try {
+      startBridge(engine, Number(process.env.BRIDGE_PORT) || 7878);
+    } catch (err) {
+      log.warn(`Could not start extension bridge: ${String(err)}`);
+    }
+  }
 }
 
 main().catch((err) => {
