@@ -1,14 +1,12 @@
 // One-time calibration for a set-and-forget copier.
 //
-//   npm run setup        (or: npx tsx tools/setup.ts)
+//   npm run setup
 //
-// For each prop firm, enter the Tradovate username+password of that login.
-// The tool verifies the login (demo then live), lists its accounts, lets you
-// pick the master, and writes config.json in "credentials" mode — after which
-// the copier mints and renews its own tokens forever (no DevTools, no pasting).
-//
-// If a login refuses password auth (captcha…), you can paste a web-session
-// token for that firm instead — everything else stays automatic.
+// For each prop firm you add a login (a session token — recommended — or, if
+// that firm allows plain password auth, username+password). The tool verifies
+// it (demo then live), lists the accounts, lets you pick the master, and writes
+// config.json. A token login stays autonomous while the service runs (tokens
+// renew themselves and survive restarts via the on-disk cache).
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { writeFileSync } from "node:fs";
@@ -17,7 +15,6 @@ import type { Account, Environment } from "../src/tradovate/types";
 import { setLogLevel } from "../src/logger";
 
 interface Login {
-  // exactly one of (name+password) | token
   name?: string;
   password?: string;
   token?: string;
@@ -28,7 +25,7 @@ interface Login {
 type Creds = { name: string; password: string } | { token: string };
 
 async function discover(creds: Creds): Promise<{ env: Environment; accounts: Account[] } | string> {
-  let lastError = "no accounts found on demo or live";
+  let lastError = "aucun compte sur demo ni live";
   for (const env of ["demo", "live"] as Environment[]) {
     const c = new TradovateClient({
       label: env,
@@ -55,43 +52,50 @@ async function main(): Promise<void> {
   const rl = createInterface({ input, output });
   console.log(
     "\n── Calibration du copieur ─────────────────────────────────────\n" +
-      "Pour chaque firme (Tradovate, Lucid, Apex…), entre l'email/login et\n" +
-      "le mot de passe du compte Tradovate correspondant. Une fois calibré,\n" +
-      "le copieur se connecte et se renouvelle tout seul.\n",
+      "Ajoute une firme à la fois. Pour chacune, colle un TOKEN de session\n" +
+      "(recommandé), ou choisis le mot de passe si ta firme l'autorise.\n",
   );
 
   const logins: Login[] = [];
   for (let i = 1; ; i++) {
-    const name = (await rl.question(`  Login/email firme #${i} (Entrée pour terminer) : `)).trim();
-    if (!name) break;
-    const password = (await rl.question(`  Mot de passe ${name} : `)).trim();
-    process.stdout.write("    → connexion… ");
-    const found = await discover({ name, password });
-    if (typeof found === "string") {
-      console.log(`ÉCHEC : ${found}`);
-      const tok = (
-        await rl.question("    Token de session en secours pour cette firme (ou Entrée pour passer) : ")
-      )
-        .trim()
-        .replace(/^Bearer\s+/i, "");
-      if (!tok) continue;
-      process.stdout.write("    → connexion par token… ");
-      const viaTok = await discover({ token: tok });
-      if (typeof viaTok === "string") {
-        console.log(`ÉCHEC : ${viaTok} — firme ignorée.`);
+    const choice = (
+      await rl.question(`Firme #${i} — [t]oken, [m]ot de passe, ou Entrée pour terminer : `)
+    )
+      .trim()
+      .toLowerCase();
+    if (!choice) break;
+
+    let creds: Creds;
+    if (choice.startsWith("m")) {
+      const name = (await rl.question("  Login/email : ")).trim();
+      const password = (await rl.question("  Mot de passe : ")).trim();
+      if (!name || !password) {
+        console.log("  (vide) — ignoré.");
         continue;
       }
-      console.log(`${viaTok.accounts.length} compte(s) [${viaTok.env}] : ${viaTok.accounts.map((a) => a.name).join(", ")}`);
-      logins.push({ token: tok, ...viaTok });
+      creds = { name, password };
+    } else {
+      const token = (await rl.question("  Colle le token : ")).trim().replace(/^Bearer\s+/i, "");
+      if (!token) {
+        console.log("  (vide) — ignoré.");
+        continue;
+      }
+      creds = { token };
+    }
+
+    process.stdout.write("    → connexion… ");
+    const found = await discover(creds);
+    if (typeof found === "string") {
+      console.log(`ÉCHEC : ${found}`);
       continue;
     }
     console.log(`${found.accounts.length} compte(s) [${found.env}] : ${found.accounts.map((a) => a.name).join(", ")}`);
-    logins.push({ name, password, ...found });
+    logins.push({ ...("token" in creds ? { token: creds.token } : creds), ...found });
   }
 
   const all = logins.flatMap((l, li) => l.accounts.map((a) => ({ name: a.name, li })));
   if (all.length === 0) {
-    console.log("\nAucun compte trouvé — rien d'écrit.");
+    console.log("\nAucun compte — rien d'écrit.");
     rl.close();
     process.exit(1);
   }
@@ -146,8 +150,8 @@ async function main(): Promise<void> {
     `\n✓ config.json écrit — maître "${master.name}" + ${followers.length} follower(s), ` +
       (real ? "mode RÉEL." : "simulation [DRY]."),
   );
-  console.log("  Démarrer :            npm start");
-  console.log("  Service 24/7 (Mac) :  npm run service:install\n");
+  console.log("  Démarrer maintenant : npm start");
+  console.log("  Service 24/7 (Mac)  : npm run service:install\n");
   process.exit(0);
 }
 
