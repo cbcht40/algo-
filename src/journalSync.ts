@@ -1,15 +1,14 @@
-// Journal sync. The Copieur pulls the fills it can see (with its always-fresh
-// Tradovate token) and pushes the resulting trades into the user's Let-Trade Journal
-// (/api/copier-sync — Edge-gated + deduplicated). Two entry points:
-//   - startJournalSync(): periodic background sync (last N days, all accounts).
-//   - listAccounts()/importRange(): on-demand import driven by the website button,
-//     exposed through the Copieur's local dashboard server.
+// Real-time journal sync. The Copieur already receives the master account's fills
+// over the websocket (it uses them to mirror orders). We listen to that same stream,
+// reconstruct completed trades (FIFO), and push them to the user's Let-Trade Journal
+// (/api/copier-sync — Edge-gated + deduplicated). No history is fetched (Tradovate's
+// REST exposes none); this captures trades AS THEY HAPPEN, going forward.
 import { logger } from "./logger";
 import type { CopierEngine } from "./copier/engine";
 
 const log = logger("journal-sync");
 const SYNC_URL = process.env.JOURNAL_SYNC_URL || "https://let-tradejournal.com/api/copier-sync";
-const WINDOW_DAYS = Number(process.env.JOURNAL_SYNC_DAYS) || 14;
+const SETTLE_MS = Number(process.env.JOURNAL_SYNC_SETTLE_MS) || 8_000;
 
 // $ per point — same table as api/tradovate.js on the web side.
 const MULTIPLIERS: Record<string, number> = {
@@ -28,7 +27,6 @@ function getMultiplier(sym: string): number {
 }
 
 interface Fill {
-  accountId?: number;
   contractId: number;
   timestamp: string;
   action: string; // "Buy" | "Sell"
@@ -67,7 +65,6 @@ function groupFillsToTrades(fills: Fill[], symbolMap: Record<number, string>, br
     if (!positions[symbol]) positions[symbol] = [];
     const pos = positions[symbol];
     const isBuy = fill.action === "Buy";
-
     const netQty = pos.reduce((s, p) => s + (p.isBuy ? p.qty : -p.qty), 0);
     const isClosing = (netQty > 0 && !isBuy) || (netQty < 0 && isBuy);
 
@@ -83,23 +80,11 @@ function groupFillsToTrades(fills: Fill[], symbolMap: Record<number, string>, br
         const diff = direction === "Long" ? fill.price - open.price : open.price - fill.price;
         const grossPnl = parseFloat((diff * matched * mult).toFixed(2));
         trades.push({
-          symbol,
-          direction,
-          entryDate: open.timestamp,
-          exitDate: fill.timestamp,
-          entryPrice: open.price,
-          initialEntry: open.price,
-          exitPrice: fill.price,
-          quantity: matched,
-          grossPnl,
-          pnl: grossPnl,
-          commission: 0,
-          partials: 1,
-          notes: "",
-          broker,
-          importedAt: new Date().toISOString(),
-          stopPrice: null,
-          rr: null,
+          symbol, direction,
+          entryDate: open.timestamp, exitDate: fill.timestamp,
+          entryPrice: open.price, initialEntry: open.price, exitPrice: fill.price,
+          quantity: matched, grossPnl, pnl: grossPnl, commission: 0, partials: 1,
+          notes: "", broker, importedAt: new Date().toISOString(), stopPrice: null, rr: null,
         });
         remaining -= matched;
         open.qty -= matched;
@@ -109,77 +94,6 @@ function groupFillsToTrades(fills: Fill[], symbolMap: Record<number, string>, br
     }
   }
   return trades;
-}
-
-export interface AccountInfo {
-  id: number;
-  name: string;
-}
-
-/** Authenticated accounts across all logins — feeds the website's account picker. */
-export function listAccounts(engine: CopierEngine): AccountInfo[] {
-  const out: AccountInfo[] = [];
-  const seen = new Set<number>();
-  for (const client of engine.allClients()) {
-    if (!client.isAuthenticated) continue;
-    for (const acct of client.accounts) {
-      if (seen.has(acct.id)) continue;
-      seen.add(acct.id);
-      out.push({ id: acct.id, name: acct.name });
-    }
-  }
-  return out;
-}
-
-// Fetch + FIFO-group fills in [sinceMs, untilMs] (optionally a single account).
-async function collectTrades(
-  engine: CopierEngine,
-  opts: { sinceMs: number; untilMs?: number; accountId?: number },
-): Promise<SyncTrade[]> {
-  const untilMs = opts.untilMs ?? Date.now();
-  const all: SyncTrade[] = [];
-
-  for (const client of engine.allClients()) {
-    if (!client.isAuthenticated) continue;
-    let fills: Fill[];
-    try {
-      fills = (await client.restGet("/fill/list")) as Fill[];
-    } catch (e) {
-      log.warn(`Fills indisponibles : ${(e as Error).message}`);
-      continue;
-    }
-    if (!Array.isArray(fills) || !fills.length) continue;
-
-    const recent = fills.filter((f) => {
-      if (!f.timestamp) return false;
-      const t = new Date(f.timestamp).getTime();
-      if (t < opts.sinceMs || t > untilMs) return false;
-      if (opts.accountId != null && f.accountId !== opts.accountId) return false;
-      return true;
-    });
-    if (!recent.length) continue;
-
-    const ids = [...new Set(recent.map((f) => f.contractId))];
-    const symbolMap: Record<number, string> = {};
-    await Promise.all(
-      ids.map(async (id) => {
-        try {
-          const c = (await client.restGet(`/contract/item?id=${id}`)) as { name?: string; symbol?: string };
-          symbolMap[id] = c?.name || c?.symbol || `#${id}`;
-        } catch {
-          symbolMap[id] = `#${id}`;
-        }
-      }),
-    );
-
-    const accts = opts.accountId != null ? client.accounts.filter((a) => a.id === opts.accountId) : client.accounts;
-    for (const acct of accts) {
-      const af = recent.filter((f) => f.accountId === acct.id);
-      if (!af.length) continue;
-      all.push(...groupFillsToTrades(af, symbolMap, `Tradovate · ${acct.name}`));
-    }
-  }
-  return all;
 }
 
 async function pushTrades(license: string, trades: SyncTrade[]): Promise<{ imported: number; skipped: number; error?: string }> {
@@ -198,26 +112,10 @@ async function pushTrades(license: string, trades: SyncTrade[]): Promise<{ impor
   }
 }
 
-export interface SyncResult {
-  imported: number;
-  skipped: number;
-  found: number;
-  error?: string;
-}
-
-/** On-demand import (website button): fetch a window for one (or all) accounts and push. */
-export async function importRange(
-  engine: CopierEngine,
-  license: string,
-  opts: { accountId?: number; sinceMs: number; untilMs?: number },
-): Promise<SyncResult> {
-  if (!license) return { imported: 0, skipped: 0, found: 0, error: "licence manquante" };
-  const trades = await collectTrades(engine, opts);
-  const res = await pushTrades(license, trades);
-  return { ...res, found: trades.length };
-}
-
-/** Periodic background sync (last N days, all authenticated accounts). */
+/**
+ * Listen to the master account's live fills and journal completed trades in real
+ * time. Returns a stop() function. No-op without a license or when JOURNAL_SYNC=off.
+ */
 export function startJournalSync(engine: CopierEngine, license: string): () => void {
   if (!license) {
     log.info("Synchro journal désactivée (pas de licence).");
@@ -227,33 +125,58 @@ export function startJournalSync(engine: CopierEngine, license: string): () => v
     log.info("Synchro journal désactivée (JOURNAL_SYNC=off).");
     return () => {};
   }
-  const intervalMs = Number(process.env.JOURNAL_SYNC_INTERVAL_MS) || 5 * 60_000;
-
-  let busy = false;
-  async function syncOnce(): Promise<void> {
-    if (busy) return;
-    busy = true;
-    try {
-      const trades = await collectTrades(engine, { sinceMs: Date.now() - WINDOW_DAYS * 86_400_000 });
-      if (!trades.length) {
-        log.info("Synchro journal : rien de nouveau (comptes connectés sans trade récent).");
-        return;
-      }
-      const r = await pushTrades(license, trades);
-      if (r.error) log.warn(`Synchro journal refusée : ${r.error}`);
-      else log.info(`Journal synchronisé : ${r.imported} nouveau(x), ${r.skipped} déjà présent(s).`);
-    } catch (e) {
-      log.warn(`Synchro journal : ${(e as Error).message}`);
-    } finally {
-      busy = false;
-    }
+  const master = engine.masterClientRef;
+  if (!master) {
+    log.warn("Synchro journal : pas de compte maître — désactivée.");
+    return () => {};
   }
 
-  log.info(`Synchro journal activée — toutes les ${Math.round(intervalMs / 60_000)} min → ${SYNC_URL}`);
-  const t0 = setTimeout(() => void syncOnce(), 20_000); // let logins authenticate first
-  const timer = setInterval(() => void syncOnce(), intervalMs);
-  return () => {
-    clearTimeout(t0);
-    clearInterval(timer);
-  };
+  const orderAccount = new Map<number, number>(); // orderId -> accountId
+  const sessionFills = new Map<number, Fill & { orderId: number }>(); // fill id -> fill (all accounts)
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  async function flush(): Promise<void> {
+    // Attribute at flush time (the order events have arrived by now) and keep
+    // only the master account's own fills.
+    const masterId = engine.masterAccountIdRef;
+    const list = [...sessionFills.values()].filter((f) => orderAccount.get(f.orderId) === masterId);
+    if (!list.length) return;
+    const symbolMap: Record<number, string> = {};
+    for (const id of new Set(list.map((f) => f.contractId))) {
+      symbolMap[id] = await master!.contractName(id);
+    }
+    const trades = groupFillsToTrades(list, symbolMap, `Tradovate · ${engine.masterLabelRef}`);
+    if (!trades.length) return;
+    const r = await pushTrades(license, trades);
+    if (r.error) log.warn(`Synchro journal refusée : ${r.error}`);
+    else log.info(`Journal (temps réel) : ${r.imported} nouveau(x), ${r.skipped} déjà présent(s) — ${trades.length} trade(s) reconstruits.`);
+  }
+  function schedule(): void {
+    if (timer) return;
+    timer = setTimeout(() => { timer = null; void flush(); }, SETTLE_MS);
+  }
+
+  master.onEntity((ev) => {
+    if (ev.entityType === "order") {
+      const o = ev.entity as { id?: number; accountId?: number };
+      if (typeof o.id === "number" && typeof o.accountId === "number") orderAccount.set(o.id, o.accountId);
+      return;
+    }
+    if (ev.entityType !== "fill") return;
+    const e = ev.entity as { id?: number; orderId?: number; contractId?: number; timestamp?: string; action?: string; qty?: number; price?: number };
+    if (typeof e.id !== "number" || typeof e.orderId !== "number" || typeof e.contractId !== "number") return;
+    if (typeof e.qty !== "number" || typeof e.price !== "number") return;
+    sessionFills.set(e.id, {
+      orderId: e.orderId,
+      contractId: e.contractId,
+      timestamp: e.timestamp ?? new Date().toISOString(),
+      action: e.action ?? "Buy",
+      qty: e.qty,
+      price: e.price,
+    });
+    schedule();
+  });
+
+  log.info(`Synchro journal activée (temps réel — compte maître) → ${SYNC_URL}`);
+  return () => { if (timer) clearTimeout(timer); };
 }

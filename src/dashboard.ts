@@ -7,7 +7,6 @@ import { createServer, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
 import { logger } from "./logger";
 import type { CopierEngine, CopyEvent } from "./copier/engine";
-import { importRange, listAccounts } from "./journalSync";
 
 const log = logger("dashboard");
 
@@ -16,7 +15,7 @@ const PAGE = readFileSync(new URL("./dashboard.html", import.meta.url), "utf8");
 
 const MAX_RECENT = 200;
 
-export function startDashboard(engine: CopierEngine, port = 7879, license = ""): void {
+export function startDashboard(engine: CopierEngine, port = 7879): void {
   // Ring buffer of recent copy events so a freshly-opened page isn't empty,
   // plus the set of live SSE clients to fan each new event out to.
   const recent: CopyEvent[] = [];
@@ -30,21 +29,6 @@ export function startDashboard(engine: CopierEngine, port = 7879, license = ""):
   });
 
   const server = createServer((req, res) => {
-    // CORS so the website (let-tradejournal.com) can reach the journal endpoints,
-    // including the Private-Network-Access preflight (HTTPS page → 127.0.0.1).
-    const origin = req.headers.origin || "";
-    if (origin === "https://let-tradejournal.com" || /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
-      res.setHeader("Access-Control-Allow-Origin", origin);
-      res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-      res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-      res.setHeader("Access-Control-Allow-Private-Network", "true");
-    }
-    if (req.method === "OPTIONS") {
-      res.writeHead(204);
-      res.end();
-      return;
-    }
-
     if (req.method === "GET" && (req.url === "/" || req.url === "/index.html")) {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(PAGE);
@@ -108,45 +92,6 @@ export function startDashboard(engine: CopierEngine, port = 7879, license = ""):
       req.on("close", () => {
         clearInterval(ping);
         clients.delete(res);
-      });
-      return;
-    }
-
-    // ── Website on-demand import (the "Importer automatiquement" button) ──
-    if (req.method === "GET" && req.url?.startsWith("/api/journal/accounts")) {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ hasLicense: !!license, accounts: listAccounts(engine) }));
-      return;
-    }
-
-    if (req.method === "POST" && req.url?.startsWith("/api/journal/import")) {
-      let body = "";
-      req.on("data", (c) => (body += c));
-      req.on("end", async () => {
-        let accountId: number | undefined;
-        let sinceMs = 0;
-        let untilMs = Date.now();
-        try {
-          const b = JSON.parse(body || "{}");
-          if (b.accountId != null && b.accountId !== "") accountId = Number(b.accountId);
-          if (b.start) sinceMs = Date.parse(`${b.start}T00:00:00Z`);
-          if (b.end) untilMs = Date.parse(`${b.end}T23:59:59Z`);
-        } catch {
-          /* malformed body → import the full window for all accounts */
-        }
-        if (!license) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "Pas de licence configurée dans le Copieur." }));
-          return;
-        }
-        try {
-          const result = await importRange(engine, license, { accountId, sinceMs, untilMs });
-          res.writeHead(result.error ? 502 : 200, { "Content-Type": "application/json" });
-          res.end(JSON.stringify(result));
-        } catch (e) {
-          res.writeHead(500, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: String(e) }));
-        }
       });
       return;
     }
