@@ -10,7 +10,11 @@ const fs = require('node:fs')
 const ROOT = path.join(__dirname, '..')
 const PORT = Number(process.env.DASHBOARD_PORT) || 7879
 const DASH_URL = `http://127.0.0.1:${PORT}`
-const MASTER_FILE = path.join(ROOT, '.copier-master.json')
+
+// Packaged: config + caches live in the writable user-data dir (the app bundle is
+// read-only). Dev: they live in the project root.
+const dataDir = () => (app.isPackaged ? app.getPath('userData') : ROOT)
+const masterFile = () => path.join(dataDir(), '.copier-master.json')
 
 let copier = null
 let win = null
@@ -43,12 +47,27 @@ async function waitForDashboard(tries = 60) {
 }
 
 function startCopier() {
-  const bin = path.join(ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx')
-  copier = spawn(bin, ['src/index.ts'], {
-    cwd: ROOT,
-    env: process.env,
+  const env = { ...process.env }
+  let cmd
+  let args
+  let cwd
+  if (app.isPackaged) {
+    // Run the bundled copier with Electron's own Node — no system node/npm/tsx.
+    // Config + token/license/master caches all live in the user-data dir.
+    cmd = process.execPath
+    args = [path.join(ROOT, 'build', 'copier.mjs')]
+    cwd = dataDir()
+    env.ELECTRON_RUN_AS_NODE = '1'
+  } else {
+    cmd = path.join(ROOT, 'node_modules', '.bin', process.platform === 'win32' ? 'tsx.cmd' : 'tsx')
+    args = ['src/index.ts']
+    cwd = ROOT
+  }
+  copier = spawn(cmd, args, {
+    cwd,
+    env,
     stdio: 'inherit',
-    shell: process.platform === 'win32',
+    shell: !app.isPackaged && process.platform === 'win32',
   })
   copier.on('exit', (code) => {
     copier = null
@@ -78,7 +97,7 @@ function restartCopier() {
 // The dashboard writes .copier-master.json when the user picks a new master.
 function watchMaster() {
   try {
-    fs.watchFile(MASTER_FILE, { interval: 1000 }, (curr, prev) => {
+    fs.watchFile(masterFile(), { interval: 1000 }, (curr, prev) => {
       if (curr.mtimeMs !== prev.mtimeMs) restartCopier()
     })
   } catch (err) {
@@ -101,9 +120,9 @@ const ERROR_HTML =
   'data:text/html,' +
   encodeURIComponent(
     `<body style="background:#0a0a10;color:#fb7185;font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
-       <div style="text-align:center;max-width:420px">
+       <div style="text-align:center;max-width:460px;padding:20px">
          <div style="font-size:18px;font-weight:700">Le copieur n'a pas démarré</div>
-         <div style="margin-top:8px;font-size:13px;color:#9090aa">Réessaie, ou lance-le à la main (npm start) pour voir l'erreur.</div>
+         <div style="margin-top:8px;font-size:13px;color:#9090aa">Aucune configuration trouvée (ou une erreur au démarrage). L'assistant de configuration arrive bientôt.</div>
        </div>
      </body>`,
   )
@@ -118,7 +137,6 @@ async function createWindow() {
     title: 'Copieur Tradovate',
     webPreferences: { contextIsolation: true, nodeIntegration: false },
   })
-  // External links open in the real browser; localhost stays in the app.
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
     return { action: 'deny' }

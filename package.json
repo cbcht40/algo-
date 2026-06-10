@@ -2,7 +2,9 @@
   "name": "tradovate-copier",
   "version": "0.1.0",
   "description": "Near-instant order-replication trade copier for Tradovate (Mac-friendly, no NinjaTrader needed).",
+  "author": "Let-Trade Journal",
   "type": "module",
+  "main": "electron/main.cjs",
   "engines": {
     "node": ">=18"
   },
@@ -17,7 +19,9 @@
     "service:restart": "bash tools/service.sh restart",
     "typecheck": "tsc --noEmit",
     "build": "tsc",
-    "app": "electron electron/main.cjs"
+    "app": "electron electron/main.cjs",
+    "bundle": "node scripts/bundle.mjs",
+    "dist": "npm run bundle && electron-builder --mac"
   },
   "dependencies": {
     "ws": "^8.18.0"
@@ -26,7 +30,26 @@
     "@types/node": "^20.14.0",
     "@types/ws": "^8.5.10",
     "electron": "^42.4.0",
+    "electron-builder": "^26.15.2",
+    "esbuild": "^0.28.0",
     "tsx": "^4.16.0",
     "typescript": "^5.5.0"
+  },
+  "build": {
+    "appId": "com.lettradejournal.copier",
+    "productName": "Copieur Tradovate",
+    "asar": false,
+    "files": [
+      "electron/**",
+      "build/**",
+      "package.json"
+    ],
+    "directories": { "output": "release" },
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.finance",
+      "identity": null
+    },
+    "win": { "target": "nsis" }
   }
 }
