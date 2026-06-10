@@ -31,4 +31,5 @@ await build({
 });
 
 copyFileSync("src/dashboard.html", "build/dashboard.html");
-console.log("✓ bundled → build/copier.mjs (+ build/dashboard.html)");
+copyFileSync("src/onboarding.html", "build/onboarding.html");
+console.log("✓ bundled → build/copier.mjs (+ dashboard.html, onboarding.html)");

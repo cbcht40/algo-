@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Copieur Tradovate — Configuration</title>
+<style>
+  :root {
+    --bg:#0a0a10; --card:#14141d; --card2:#1a1a25; --border:#26263a;
+    --txt:#ececf4; --txt2:#9494aa; --txt3:#5a5a70;
+    --green:#34d399; --red:#fb7185; --amber:#fbbf24; --accent:#6c63ff;
+    --mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--txt); min-height:100vh; padding:28px 24px;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-size:15px; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:640px; margin:0 auto; }
+  h1 { font-size:22px; font-weight:800; letter-spacing:-.3px; margin-bottom:4px; }
+  .lead { color:var(--txt2); font-size:13.5px; margin-bottom:26px; }
+  .step { background:var(--card); border:1px solid var(--border); border-radius:14px; padding:20px 22px; margin-bottom:14px; transition:opacity .2s; }
+  .step.locked { opacity:.45; pointer-events:none; }
+  .step .num { font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.1em; color:var(--txt3); text-transform:uppercase; margin-bottom:10px; }
+  .step.done .num { color:var(--green); }
+  .step h2 { font-size:16px; font-weight:700; margin-bottom:6px; }
+  .step p { color:var(--txt2); font-size:13px; line-height:1.55; margin-bottom:14px; }
+  .step p b { color:var(--txt); }
+  input[type=text] { width:100%; background:var(--card2); border:1px solid var(--border); border-radius:9px; color:var(--txt);
+    font-family:var(--mono); font-size:13px; padding:12px 14px; }
+  input[type=text]:focus { outline:none; border-color:var(--accent); }
+  .row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  button { font-family:var(--mono); font-size:13px; font-weight:700; border:none; border-radius:9px; padding:11px 20px; cursor:pointer; }
+  button.primary { background:var(--accent); color:#fff; }
+  button.go { background:var(--green); color:#06121d; font-size:15px; padding:13px 28px; }
+  button:disabled { opacity:.4; cursor:not-allowed; }
+  .msg { font-family:var(--mono); font-size:12.5px; margin-top:10px; }
+  .msg.ok { color:var(--green); } .msg.err { color:var(--red); } .msg.wait { color:var(--amber); }
+  .accts { display:flex; flex-direction:column; gap:7px; margin-top:6px; }
+  .acct { display:flex; align-items:center; gap:11px; background:var(--card2); border:1px solid var(--border); border-radius:9px; padding:11px 14px; cursor:pointer; }
+  .acct:hover { border-color:var(--border); background:#20202c; }
+  .acct input { accent-color:var(--accent); }
+  .acct .nm { font-weight:600; font-size:14px; }
+  .acct .env { font-family:var(--mono); font-size:11px; color:var(--txt3); margin-left:auto; }
+  .hint { font-family:var(--mono); font-size:11px; color:var(--txt3); margin-top:8px; }
+  .chk { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--txt2); margin:14px 0; }
+  .spin { display:inline-block; width:12px; height:12px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:sp .8s linear infinite; vertical-align:-1px; margin-right:6px; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>Configuration du Copieur</h1>
+    <div class="lead">Trois étapes, une seule fois. Aucune donnée ne quitte ton ordinateur.</div>
+
+    <!-- 1. License -->
+    <div class="step done" id="s1">
+      <div class="num" id="s1n">Étape 1 — Ta clé Edge</div>
+      <h2>Colle ta clé de licence</h2>
+      <p>Tu la trouves sur <b>let-tradejournal.com/copieur</b> (bouton « Copier »).</p>
+      <div class="row">
+        <input type="text" id="key" placeholder="ltj_…" autocomplete="off" spellcheck="false" style="flex:1;min-width:220px" />
+        <button class="primary" id="checkBtn" onclick="checkKey()">Valider</button>
+      </div>
+      <div class="msg" id="s1msg"></div>
+    </div>
+
+    <!-- 2. Connect Tradovate -->
+    <div class="step locked" id="s2">
+      <div class="num">Étape 2 — Connecte Tradovate</div>
+      <h2>Branche tes comptes</h2>
+      <p>Installe l'<b>extension Copilink</b> dans Chrome, puis <b>connecte-toi sur Tradovate</b> : elle envoie tes comptes ici automatiquement. Tes comptes apparaissent dès qu'ils sont détectés.</p>
+      <div class="msg wait" id="s2msg"><span class="spin"></span>En attente de tes comptes…</div>
+      <div class="accts" id="accts"></div>
+    </div>
+
+    <!-- 3. Pick master + start -->
+    <div class="step locked" id="s3">
+      <div class="num">Étape 3 — Choisis ton maître</div>
+      <h2>Quel compte pilote les autres ?</h2>
+      <p>Sélectionne le compte sur lequel tu <b>trades</b> — les autres le copieront.</p>
+      <div class="accts" id="masterPick"></div>
+      <label class="chk"><input type="checkbox" id="dry" /> Démarrer en <b>simulation</b> (aucun ordre réel envoyé)</label>
+      <button class="go" id="saveBtn" onclick="save()" disabled>Démarrer le copieur →</button>
+      <div class="msg" id="s3msg"></div>
+    </div>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  let unlocked = false, accounts = [], master = null;
+
+  async function checkKey() {
+    const key = $('key').value.trim();
+    if (!key) return;
+    $('checkBtn').disabled = true; $('s1msg').className = 'msg wait'; $('s1msg').innerHTML = '<span class="spin"></span>Vérification…';
+    try {
+      const r = await fetch('/api/license', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ key }) });
+      const d = await r.json();
+      unlocked = !!d.unlocked;
+      if (unlocked) {
+        $('s1msg').className = 'msg ok'; $('s1msg').textContent = '✓ Edge vérifié' + (d.email ? ' — ' + d.email : '');
+        $('s1n').textContent = 'Étape 1 — Clé Edge ✓';
+        $('s2').classList.remove('locked');
+      } else {
+        $('s1msg').className = 'msg err'; $('s1msg').textContent = '✗ ' + (d.error || 'clé invalide') + (d.plan ? ' (plan : ' + d.plan + ')' : '');
+      }
+    } catch { $('s1msg').className = 'msg err'; $('s1msg').textContent = 'Serveur injoignable.'; }
+    $('checkBtn').disabled = false;
+  }
+
+  function renderAccounts() {
+    if (!accounts.length) return;
+    $('s2msg').className = 'msg ok'; $('s2msg').textContent = '✓ ' + accounts.length + ' compte(s) détecté(s)';
+    $('accts').innerHTML = accounts.map(a => `<div class="acct"><span class="nm">${esc(a.name)}</span><span class="env">${esc(a.env)}</span></div>`).join('');
+    $('s3').classList.remove('locked');
+    $('masterPick').innerHTML = accounts.map((a,i) => `
+      <label class="acct"><input type="radio" name="master" value="${esc(a.name)}" onchange="pickMaster('${esc(a.name)}')">
+        <span class="nm">${esc(a.name)}</span><span class="env">${esc(a.env)}</span></label>`).join('');
+  }
+  function pickMaster(spec) { master = spec; $('saveBtn').disabled = !master; }
+
+  async function save() {
+    if (!master) return;
+    $('saveBtn').disabled = true; $('s3msg').className = 'msg wait'; $('s3msg').innerHTML = '<span class="spin"></span>Écriture de la config + démarrage du copieur…';
+    try {
+      const r = await fetch('/api/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ masterSpec: master, dryRun: $('dry').checked }) });
+      const d = await r.json();
+      if (d.ok) { $('s3msg').className = 'msg ok'; $('s3msg').textContent = '✓ C\'est parti — le copieur démarre, la fenêtre va se recharger…'; }
+      else { $('s3msg').className = 'msg err'; $('s3msg').textContent = '✗ ' + (d.error || 'erreur'); $('saveBtn').disabled = false; }
+    } catch { $('s3msg').className = 'msg err'; $('s3msg').textContent = 'Serveur injoignable.'; $('saveBtn').disabled = false; }
+  }
+
+  async function poll() {
+    try {
+      const d = await (await fetch('/api/setup', { cache:'no-store' })).json();
+      if (d.accounts && d.accounts.length !== accounts.length) { accounts = d.accounts; renderAccounts(); }
+    } catch {}
+  }
+  setInterval(poll, 1500); poll();
+</script>
+</body>
+</html>

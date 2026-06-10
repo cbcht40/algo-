@@ -1,5 +1,7 @@
+import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadConfig } from "./config";
+import { startSetup } from "./setup";
 import { CopierEngine } from "./copier/engine";
 import { startBridge } from "./bridge";
 import { startDashboard } from "./dashboard";
@@ -11,6 +13,15 @@ const log = logger("main");
 async function main() {
   const configPath = resolve(process.argv[2] ?? process.env.COPIER_CONFIG ?? "config.json");
   if (process.env.LOG_LEVEL) setLogLevel(process.env.LOG_LEVEL as any);
+
+  // Fresh install (no config) → run the onboarding/setup server instead of the
+  // copier. It writes config.json once the user finishes, then exits so the
+  // Electron app (watching config.json) restarts into the copier.
+  if (process.env.COPIER_SETUP === "1" || !existsSync(configPath)) {
+    log.info("Aucune configuration — démarrage de l'assistant de configuration.");
+    startSetup({ configPath });
+    return;
+  }
 
   const cfg = loadConfig(configPath);
   log.info(`Loaded config from ${configPath}`);

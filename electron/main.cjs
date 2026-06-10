@@ -24,6 +24,7 @@ let copier = null
 let win = null
 let quitting = false
 let restarting = false
+let lastWasSetup = false
 
 function dashboardUp() {
   return new Promise((resolve) => {
@@ -52,6 +53,7 @@ async function waitForDashboard(tries = 60) {
 
 function startCopier() {
   const env = { ...process.env }
+  lastWasSetup = !fs.existsSync(path.join(dataDir(), 'config.json'))
   let cmd
   let args
   let cwd
@@ -73,9 +75,16 @@ function startCopier() {
     stdio: 'inherit',
     shell: !app.isPackaged && process.platform === 'win32',
   })
-  copier.on('exit', (code) => {
+  copier.on('exit', async (code) => {
     copier = null
     console.log(`[electron] copier exited (${code})`)
+    if (quitting || restarting) return
+    // Onboarding just finished → config now exists → restart into the copier.
+    if (lastWasSetup && fs.existsSync(path.join(dataDir(), 'config.json'))) {
+      startCopier()
+      const ok = await waitForDashboard()
+      if (win && !win.isDestroyed()) win.loadURL(ok ? DASH_URL : ERROR_HTML)
+    }
   })
   copier.on('error', (err) => console.error('[electron] failed to start copier:', err))
 }

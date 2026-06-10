@@ -17,7 +17,7 @@ const RECHECK_MS = 6 * 60 * 60_000; // re-verify every 6h
 const GRACE_MS = 72 * 60 * 60_000; // honour last good unlock for 72h if unreachable
 const STATE_FILE = resolve(process.env.COPIER_LICENSE_STATE || ".copier-license.json");
 
-interface VerifyResult {
+export interface VerifyResult {
   unlocked: boolean;
   reachable: boolean; // did we get a definitive answer from the backend?
   plan?: string;
@@ -26,7 +26,7 @@ interface VerifyResult {
   error?: string;
 }
 
-async function verifyLicense(key: string): Promise<VerifyResult> {
+export async function verifyLicense(key: string): Promise<VerifyResult> {
   try {
     const r = await fetch(VERIFY_URL, {
       method: "POST",
