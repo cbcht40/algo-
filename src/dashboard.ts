@@ -96,6 +96,15 @@ export function startDashboard(engine: CopierEngine, port = 7879): void {
       return;
     }
 
+    // Re-discover accounts on connected logins → auto-add any new one as a follower.
+    if (req.method === "POST" && req.url?.startsWith("/api/rescan")) {
+      engine.rescanAccounts().then(
+        (r) => { res.writeHead(200, { "Content-Type": "application/json" }); res.end(JSON.stringify(r)); },
+        (err) => { res.writeHead(500, { "Content-Type": "application/json" }); res.end(JSON.stringify({ error: String(err) })); },
+      );
+      return;
+    }
+
     res.writeHead(404);
     res.end();
   });

@@ -1,3 +1,4 @@
+import { writeFileSync } from "node:fs";
 import type { AccountConfig, Config, FollowerConfig } from "../config";
 import type { LicenseGate } from "../license";
 import { resolveRoster, isKnownSpec, setMasterSpec } from "../roster";
@@ -53,6 +54,7 @@ const log = logger("engine");
 
 export class CopierEngine {
   private cfg: Config;
+  private configPath = "";
   private clients = new Map<string, TradovateClient>();
   private masterClient!: TradovateClient;
   private masterAccountId = 0;
@@ -94,6 +96,56 @@ export class CopierEngine {
   }
   get isActive(): boolean {
     return this.active;
+  }
+
+  /** Where to persist config.json when new accounts are auto-added (rescan). */
+  setPersistPath(path: string): void {
+    this.configPath = path;
+  }
+
+  /** Re-discover the accounts on every connected login and auto-add any NEW one as a
+   *  follower (×1). Triggered by the dashboard "Rechercher de nouveaux comptes" button.
+   *  Persisted to config.json so the new accounts survive a restart. */
+  async rescanAccounts(): Promise<{ added: number; total: number; names: string[] }> {
+    await Promise.all([...this.clients.values()].map((c) => c.reSyncAccounts().catch(() => undefined)));
+
+    const knownSpec = new Set<string>();
+    const addSpec = (s?: string) => { if (s) knownSpec.add(s.toLowerCase()); };
+    addSpec(this.masterAccountSpec);
+    addSpec(this.rosterMaster?.accountSpec);
+    addSpec(this.rosterMaster?.label);
+    addSpec(this.cfg.master?.accountSpec);
+    addSpec(this.cfg.master?.label);
+    for (const f of this.cfg.followers ?? []) { addSpec(f.accountSpec); addSpec(f.label); }
+    const knownId = new Set<number>([this.masterAccountId, ...this.followers.map((f) => f.accountId).filter(Boolean)]);
+
+    const added: string[] = [];
+    for (const client of this.clients.values()) {
+      for (const acct of client.accounts) {
+        if (knownId.has(acct.id) || knownSpec.has(acct.name.toLowerCase())) continue;
+        const fc: FollowerConfig = { label: acct.name, accountSpec: acct.name, multiplier: 1, accessToken: client.seedToken };
+        this.cfg.followers = [...(this.cfg.followers ?? []), fc];
+        this.rosterFollowers.push(fc);
+        this.followers.push({ label: acct.name, client, accountId: acct.id, accountSpec: acct.name, multiplier: 1, symbolMap: {} });
+        this.resolvedFollowers.add(this.followers.length - 1);
+        knownId.add(acct.id);
+        addSpec(acct.name);
+        added.push(acct.name);
+        log.info(`Nouveau compte détecté → follower : ${acct.name}#${acct.id}`);
+      }
+    }
+    if (added.length) this.persistConfig();
+    return { added: added.length, total: this.followers.length, names: added };
+  }
+
+  private persistConfig(): void {
+    if (!this.configPath) return;
+    try {
+      writeFileSync(this.configPath, JSON.stringify(this.cfg, null, 2));
+      log.info(`Config mise à jour → ${this.followers.length} follower(s).`);
+    } catch (err) {
+      log.warn(`Persist config échouée : ${String(err)}`);
+    }
   }
 
   /** Choose which account is the master. Persisted; applied on the next restart

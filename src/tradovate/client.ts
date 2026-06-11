@@ -304,6 +304,20 @@ export class TradovateClient {
   }
 
   /** Pull the full account/order/position snapshot and start the event stream. */
+  /** Current login token — used to persist a newly-auto-added follower's seed. */
+  get seedToken(): string {
+    return this.token?.accessToken ?? this.opts.accessToken ?? "";
+  }
+
+  /** Re-fetch the account list (to pick up newly-opened accounts) WITHOUT replaying
+   *  the order/position snapshot (which would re-process old orders). */
+  async reSyncAccounts(): Promise<Account[]> {
+    const msg = await this.request("user/syncrequest", { users: [this.userId] });
+    const d = msg.d ?? {};
+    if (Array.isArray(d.accounts)) this.accounts = d.accounts as Account[];
+    return this.accounts;
+  }
+
   private async syncRequest(): Promise<void> {
     const msg = await this.request("user/syncrequest", { users: [this.userId] });
     const d = msg.d ?? {};

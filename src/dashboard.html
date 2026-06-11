@@ -213,6 +213,19 @@
   }
   window.setMaster = setMaster;
 
+  async function rescan(btn) {
+    if (btn) { btn.disabled = true; btn.textContent = '🔄 Recherche…'; }
+    try {
+      const r = await fetch('/api/rescan', { method: 'POST' });
+      const d = await r.json().catch(() => ({}));
+      if (d.error) showToast('Échec : ' + d.error);
+      else if (d.added > 0) showToast('✓ ' + d.added + ' compte(s) ajouté(s) : ' + (d.names || []).join(', '));
+      else showToast('Aucun nouveau compte trouvé.');
+      await refresh();
+    } catch (_) { showToast('Serveur injoignable'); }
+  }
+  window.rescan = rescan;
+
   function renderTop(s) {
     const followers = s.followers || [];
     const connCount = (s.master.connected ? 1 : 0) + followers.filter(f => f.connected).length;
@@ -229,7 +242,9 @@
         ${s.dryRun ? '<span class="badge dry">dry-run</span>' : ''}
         ${lic && lic.licensed ? '<span class="badge edge">Edge ✓</span>' : ''}
       </header>
-      <div class="sub"><b>${connCount}/${total}</b> connecté(s) · <b>${openPos}</b> position(s) ouverte(s)</div>
+      <div class="sub"><b>${connCount}/${total}</b> connecté(s) · <b>${openPos}</b> position(s) ouverte(s)
+        <button onclick="rescan(this)" style="margin-left:14px;background:var(--card2);border:1px solid var(--border);color:var(--txt2);font-size:11.5px;font-weight:600;padding:5px 11px;border-radius:8px;cursor:pointer;vertical-align:middle;">🔄 Rechercher de nouveaux comptes</button>
+      </div>
 
       <div class="section-h">Compte maître</div>
       ${acctRow(s.master, true)}

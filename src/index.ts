@@ -31,6 +31,7 @@ async function main() {
   }
 
   const engine = new CopierEngine(cfg);
+  engine.setPersistPath(configPath);
   const gate = new LicenseGate();
   engine.setLicenseGate(gate);
 
