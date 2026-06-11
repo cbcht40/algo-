@@ -5,10 +5,8 @@
 // the Electron app (watching config.json) restarts into the copier. No terminal.
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
-import { readFileSync, writeFileSync, cpSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { fileURLToPath } from "node:url";
-import { homedir } from "node:os";
 import { logger } from "./logger";
 import { verifyLicense } from "./license";
 import { TradovateClient } from "./tradovate/client";
@@ -18,49 +16,17 @@ import type { Environment } from "./tradovate/types";
 const log = logger("setup");
 const PAGE = readFileSync(new URL("./onboarding.html", import.meta.url), "utf8");
 
-// The Let Trade Copieur extension folder ships next to the bundle (one level up from src/
-// in dev, from build/ when packaged). Revealed in the file manager so the user
-// can "Load unpacked" it into Chrome.
-const EXT_DIR = (() => {
-  try {
-    return fileURLToPath(new URL("../extension", import.meta.url));
-  } catch {
-    return "";
-  }
-})();
+// The extension is published on the Chrome Web Store → installed in ONE click.
+const STORE_URL = "https://chromewebstore.google.com/detail/emkimfojffpkhakkflfmpdmbopjeobgg";
 
-function revealExtension(): string {
-  if (!EXT_DIR) return "";
-  // Copy the bundled extension to an easy-to-find folder (Downloads) and reveal it,
-  // so the user can pick it directly in Chrome's "Load unpacked" — the in-bundle
-  // path is buried inside the .app and awkward to select.
-  let target = EXT_DIR;
-  const dest = resolve(homedir(), "Downloads", "Let-Trade-Copieur-Extension");
+// Open the Chrome Web Store page so the user installs the extension in ONE click.
+function openWebStore(): void {
   try {
-    cpSync(EXT_DIR, dest, { recursive: true });
-    target = dest;
-  } catch (err) {
-    log.warn(`Copie de l'extension échouée (j'ouvre le dossier d'origine) : ${String(err)}`);
-  }
-  try {
-    if (process.platform === "darwin") spawn("open", ["-R", target], { detached: true, stdio: "ignore" }).unref();
-    else if (process.platform === "win32") spawn("explorer", [target], { detached: true, stdio: "ignore" }).unref();
-    else spawn("xdg-open", [target], { detached: true, stdio: "ignore" }).unref();
-  } catch (err) {
-    log.warn(`Impossible d'ouvrir le dossier : ${String(err)}`);
-  }
-  return target;
-}
-
-// Open Chrome straight to the extensions page so the user doesn't have to type
-// chrome://extensions themselves.
-function openChromeExtensions(): void {
-  try {
-    if (process.platform === "darwin") spawn("open", ["-a", "Google Chrome", "chrome://extensions/"], { detached: true, stdio: "ignore" }).unref();
-    else if (process.platform === "win32") spawn("cmd", ["/c", "start", "chrome", "chrome://extensions/"], { detached: true, stdio: "ignore" }).unref();
-    else spawn("google-chrome", ["chrome://extensions/"], { detached: true, stdio: "ignore" }).unref();
+    if (process.platform === "darwin") spawn("open", [STORE_URL], { detached: true, stdio: "ignore" }).unref();
+    else if (process.platform === "win32") spawn("cmd", ["/c", "start", "", STORE_URL], { detached: true, stdio: "ignore" }).unref();
+    else spawn("xdg-open", [STORE_URL], { detached: true, stdio: "ignore" }).unref();
   } catch {
-    /* best effort — the on-screen hint tells the user to open it manually */
+    /* best effort — the on-screen hint shows the link too */
   }
 }
 
@@ -200,9 +166,8 @@ export function startSetup(opts: SetupOptions): void {
     if (req.method === "GET" && req.url?.startsWith("/api/setup")) return void json(200, state());
 
     if (req.method === "POST" && req.url?.startsWith("/api/extension")) {
-      const extPath = revealExtension();
-      openChromeExtensions();
-      return void json(200, { ok: true, path: extPath });
+      openWebStore();
+      return void json(200, { ok: true });
     }
 
     if (req.method === "POST" && req.url?.startsWith("/api/license")) {
