@@ -25,6 +25,7 @@
     "dist:win": "npm run bundle && electron-builder --win --publish never"
   },
   "dependencies": {
+    "electron-updater": "^6.3.9",
     "ws": "^8.18.0"
   },
   "devDependencies": {
@@ -49,6 +50,7 @@
       "package.json"
     ],
     "directories": { "output": "release" },
+    "publish": { "provider": "github", "owner": "cbcht40", "repo": "let-trade-copieur" },
     "mac": {
       "target": "dmg",
       "category": "public.app-category.finance",

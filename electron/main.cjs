@@ -6,6 +6,10 @@ const { spawn } = require('node:child_process')
 const path = require('node:path')
 const http = require('node:http')
 const fs = require('node:fs')
+// Auto-update from GitHub Releases (Windows + signed/notarized macOS). Wrapped so a
+// dev run (electron-updater absent) or an unsigned build never crashes.
+let autoUpdater = null
+try { autoUpdater = require('electron-updater').autoUpdater } catch { /* not installed in dev */ }
 
 const ROOT = path.join(__dirname, '..')
 const PORT = Number(process.env.DASHBOARD_PORT) || 7879
@@ -164,6 +168,11 @@ app.whenReady().then(async () => {
   if (!(await dashboardUp())) startCopier()
   await createWindow()
   watchMaster()
+  // Check for updates (packaged builds only). On an unsigned macOS build this rejects
+  // harmlessly until the app is notarized; on Windows it downloads + notifies.
+  if (app.isPackaged && autoUpdater) {
+    autoUpdater.checkForUpdatesAndNotify().catch((err) => console.warn('[update]', err?.message || err))
+  }
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
