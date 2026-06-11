@@ -96,6 +96,33 @@ export function startDashboard(engine: CopierEngine, port = 7879): void {
       return;
     }
 
+    // Per-follower settings: copy on/off (checkbox) + size multiplier.
+    if (req.method === "POST" && req.url?.startsWith("/api/follower")) {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        let result: { ok: boolean; error?: string } = { ok: false, error: "requête invalide" };
+        try {
+          const p = JSON.parse(body || "{}");
+          // Refuse non-number multipliers outright (Number(null) === 0 would silently
+          // zero a follower's size) — the engine's range check handles NaN/Infinity.
+          if (p.multiplier !== undefined && typeof p.multiplier !== "number") {
+            result = { ok: false, error: "Multiplicateur invalide (0 à 100)." };
+          } else {
+            result = engine.setFollowerSettings(String(p.spec || ""), {
+              ...(p.enabled !== undefined ? { enabled: !!p.enabled } : {}),
+              ...(p.multiplier !== undefined ? { multiplier: p.multiplier } : {}),
+            });
+          }
+        } catch {
+          /* malformed body */
+        }
+        res.writeHead(result.ok ? 200 : 400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(result));
+      });
+      return;
+    }
+
     // Re-discover accounts on connected logins → auto-add any new one as a follower.
     if (req.method === "POST" && req.url?.startsWith("/api/rescan")) {
       engine.rescanAccounts().then(

@@ -41,6 +41,9 @@ export interface FollowerConfig extends AccountConfig {
   multiplier?: number;
   /** Optional per-follower symbol remap, e.g. { "MESU6": "ESU6" }. */
   symbolMap?: Record<string, string>;
+  /** Copy onto this account? Unchecked in the dashboard => false. Default true.
+   *  Disabled followers still receive cancels/modifies of already-copied orders. */
+  enabled?: boolean;
 }
 
 export interface Config {

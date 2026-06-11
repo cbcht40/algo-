@@ -45,6 +45,17 @@
   .acct .meta { font-family:var(--mono); font-size:12px; color:var(--txt2); margin-top:2px; }
   .acct .grow { flex:1; min-width:0; }
   .acct .mult { font-family:var(--mono); font-size:13px; font-weight:700; color:var(--accent); }
+  /* Follower décoché : on grise tout SAUF l'interrupteur (pour pouvoir le réactiver). */
+  .acct.nocopy > *:not(.tgl) { opacity:.45; }
+  .tag-off { font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.08em; color:var(--red); background:rgba(251,113,133,.12); padding:2px 7px; border-radius:5px; }
+  .tgl { position:relative; width:36px; height:21px; flex:none; cursor:pointer; }
+  .tgl input { display:none; }
+  .tgl span { position:absolute; inset:0; background:rgba(255,255,255,.06); border:1px solid var(--border); border-radius:999px; transition:all .15s; }
+  .tgl span::after { content:''; position:absolute; top:2.5px; left:3px; width:13px; height:13px; border-radius:50%; background:#8b8b96; transition:all .15s; }
+  .tgl input:checked + span { background:rgba(52,211,153,.22); border-color:var(--green); }
+  .tgl input:checked + span::after { left:17px; background:var(--green); }
+  .mult-in { width:50px; font-family:var(--mono); font-size:13px; font-weight:700; color:var(--accent); background:rgba(255,255,255,.04); border:1px solid var(--border); border-radius:6px; padding:3px 2px 3px 5px; text-align:center; }
+  .mult-in:focus { outline:none; border-color:var(--accent); }
   .acct .state { font-family:var(--mono); font-size:12px; font-weight:700; }
   .acct .state.on  { color:var(--green); }
   .acct .state.off { color:var(--red); }
@@ -149,19 +160,58 @@
 
   function acctRow(a, isMaster) {
     const on = !!a.connected;
+    const en = a.enabled !== false;
+    const spec = a.account || a.label;
     return `
-      <div class="acct ${isMaster ? 'master' : ''}">
+      <div class="acct ${isMaster ? 'master' : ''} ${!isMaster && !en ? 'nocopy' : ''}">
         <span class="dot ${on ? 'on' : 'off'}"></span>
+        ${!isMaster ? `<label class="tgl" title="${en ? 'Copie active — décoche pour exclure ce compte' : 'Exclu de la copie — coche pour réactiver'}"><input type="checkbox" ${en ? 'checked' : ''} onchange="setFollowerEnabled('${esc(spec)}', this.checked)"><span></span></label>` : ''}
         <div class="grow">
-          <div class="name">${esc(a.label)} ${isMaster ? '<span class="tag-master">MAÎTRE</span>' : ''}</div>
+          <div class="name">${esc(a.label)} ${isMaster ? '<span class="tag-master">MAÎTRE</span>' : ''}${!isMaster && !en ? ' <span class="tag-off">NE COPIE PAS</span>' : ''}</div>
           <div class="meta">${a.account ? esc(a.account) : '— compte non résolu —'}${a.accountId ? ' · #' + a.accountId : ''}</div>
           ${posStrip(a.positions)}
         </div>
         ${!isMaster && a.account ? `<button class="mk-master" onclick="setMaster('${esc(a.account)}')" title="Définir comme compte maître">↑ maître</button>` : ''}
-        ${!isMaster ? `<span class="mult">×${a.multiplier}</span>` : ''}
+        ${!isMaster ? `<span class="mult">×</span><input class="mult-in" type="number" min="0" max="100" step="0.5" value="${a.multiplier}" data-spec="${esc(spec)}" onchange="setFollowerMult('${esc(spec)}', this.value)" onkeydown="if(event.key==='Enter')this.blur()" title="Multiplicateur de taille vs le maître (ex. 2 = double ; arrondi à l'unité inférieure : 1 lot × 0,5 → ignoré)">` : ''}
         <span class="state ${on ? 'on' : 'off'}">${on ? '● connecté' : '○ déconnecté'}</span>
       </div>`;
   }
+
+  function blurTopInput() {
+    const ae = document.activeElement;
+    if (ae && ae.tagName === 'INPUT' && ae.closest && ae.closest('#top')) ae.blur();
+  }
+  async function patchFollower(spec, body, okMsg) {
+    try {
+      const r = await fetch('/api/follower', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spec, ...body }) });
+      const d = await r.json().catch(() => ({}));
+      // Toast de succès UNIQUEMENT après confirmation du moteur — jamais en avance.
+      if (d.ok) showToast(okMsg);
+      else { showToast('Échec : ' + (d.error || 'erreur')); blurTopInput(); }
+      await refresh();
+    } catch (_) { showToast('Serveur injoignable'); blurTopInput(); await refresh(); }
+  }
+  window.setFollowerEnabled = (spec, on) => {
+    // Garde-fous "position ouverte" : réactiver pendant que le maître est en position
+    // → le compte copierait la SORTIE comme une entrée inverse ; désactiver pendant
+    // que CE compte porte une position copiée → la sortie ne serait plus copiée.
+    const s = lastState;
+    if (on && s && s.master && (s.master.positions || []).length) {
+      if (!window.confirm('⚠ Le maître a une position OUVERTE.\n\nCe compte copiera le PROCHAIN ordre du maître — y compris la SORTIE de la position en cours (le compte prendrait alors une position inverse, sans avoir l\'entrée).\n\nRecommandé : réactiver quand le maître est À PLAT.\n\nRéactiver quand même ?')) { refresh(); return; }
+    }
+    if (!on && s) {
+      const f = (s.followers || []).find(x => (x.account || x.label) === spec);
+      if (f && (f.positions || []).length) {
+        if (!window.confirm('⚠ Ce compte a une position OUVERTE (copiée).\n\nSi tu le décoches, la sortie du maître ne sera PAS copiée : la position restera ouverte sur ce compte, à gérer manuellement.\n\nRecommandé : décocher quand le compte est À PLAT.\n\nDécocher quand même ?')) { refresh(); return; }
+      }
+    }
+    patchFollower(spec, { enabled: on }, on ? ('✓ ' + spec + ' copiera les prochains ordres') : (spec + ' exclu de la copie'));
+  };
+  window.setFollowerMult = (spec, m) => {
+    const v = parseFloat(m);
+    if (!isFinite(v) || v < 0 || v > 100) { showToast('Multiplicateur invalide (0 à 100)'); return; }
+    patchFollower(spec, { multiplier: v }, '✓ ' + spec + ' → ×' + v);
+  };
 
   function licBanner(lic) {
     if (!lic || (lic.licensed && !lic.graceActive)) return '';
@@ -226,7 +276,15 @@
   }
   window.rescan = rescan;
 
+  let lastState = null;
   function renderTop(s) {
+    lastState = s;
+    // Préserve la saisie en cours dans un champ multiplicateur SANS geler le reste
+    // du panneau (un return total figerait l'état ARMÉ/positions tant que le champ
+    // garde le focus — inacceptable sur un copieur live).
+    const ae = document.activeElement;
+    const edit = (ae && ae.classList && ae.classList.contains('mult-in') && ae.dataset)
+      ? { spec: ae.dataset.spec, val: ae.value } : null;
     const followers = s.followers || [];
     const connCount = (s.master.connected ? 1 : 0) + followers.filter(f => f.connected).length;
     const total = 1 + followers.length;
@@ -251,6 +309,11 @@
 
       <div class="section-h">Followers (${followers.length})</div>
       ${followers.map(f => acctRow(f, false)).join('')}`;
+    // Re-render fait → on rend sa saisie + son focus au champ multiplicateur édité.
+    if (edit && edit.spec) {
+      const el = document.querySelector('#top .mult-in[data-spec="' + edit.spec.replace(/"/g, '\\"') + '"]');
+      if (el) { el.value = edit.val; el.focus(); }
+    }
   }
 
   function offlineTop() {

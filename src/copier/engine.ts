@@ -18,11 +18,17 @@ interface Follower {
   accountSpec: string;
   multiplier: number;
   symbolMap: Record<string, string>;
+  /** Unchecked in the dashboard => skip NEW orders for this account (cancels/
+   *  modifies of already-copied orders still flow, so nothing is orphaned). */
+  enabled: boolean;
 }
 
 interface MirrorLeg {
   follower: Follower;
   qty: number;
+  /** Multiplier in force when the leg was PLACED. Modifies must use this snapshot,
+   *  not the live f.multiplier — a live edit must never resize working orders. */
+  mult: number;
   status: "pending" | "placed" | "canceled" | "skipped" | "failed";
   followerOrderId?: number;
   error?: string;
@@ -123,10 +129,10 @@ export class CopierEngine {
     for (const client of this.clients.values()) {
       for (const acct of client.accounts) {
         if (knownId.has(acct.id) || knownSpec.has(acct.name.toLowerCase())) continue;
-        const fc: FollowerConfig = { label: acct.name, accountSpec: acct.name, multiplier: 1, accessToken: client.seedToken };
+        const fc: FollowerConfig = { label: acct.name, accountSpec: acct.name, multiplier: 1, enabled: true, accessToken: client.seedToken };
         this.cfg.followers = [...(this.cfg.followers ?? []), fc];
         this.rosterFollowers.push(fc);
-        this.followers.push({ label: acct.name, client, accountId: acct.id, accountSpec: acct.name, multiplier: 1, symbolMap: {} });
+        this.followers.push({ label: acct.name, client, accountId: acct.id, accountSpec: acct.name, multiplier: 1, symbolMap: {}, enabled: true });
         this.resolvedFollowers.add(this.followers.length - 1);
         knownId.add(acct.id);
         addSpec(acct.name);
@@ -136,6 +142,51 @@ export class CopierEngine {
     }
     if (added.length) this.persistConfig();
     return { added: added.length, total: this.followers.length, names: added };
+  }
+
+  /** Per-follower settings from the dashboard: copy on/off (checkbox) and size
+   *  multiplier. Applied LIVE (next master order) and persisted to config.json. */
+  setFollowerSettings(spec: string, patch: { enabled?: boolean; multiplier?: number }): { ok: boolean; error?: string } {
+    const key = (spec || "").toLowerCase();
+    const match = (label?: string, acct?: string) =>
+      (acct ?? "").toLowerCase() === key || (label ?? "").toLowerCase() === key;
+    const f = this.followers.find((x) => match(x.label, x.accountSpec));
+    if (!f) return { ok: false, error: `Compte inconnu : ${spec}` };
+
+    if (patch.multiplier !== undefined) {
+      const m = Number(patch.multiplier);
+      if (!Number.isFinite(m) || m < 0 || m > 100) {
+        return { ok: false, error: "Multiplicateur invalide (0 à 100)." };
+      }
+    }
+
+    // Resolve the PERSISTED entry FIRST — refuse the change if we can't save it.
+    // The entry may live in cfg.master (ex-maître devenu follower après un changement
+    // de maître) et le spec runtime peut être le nom résolu par l'API alors que la
+    // config n'a que label+accountId — on cherche donc tout le pool, par spec/label
+    // ET par accountId/label du follower runtime. Sans entrée → erreur franche
+    // (jamais un réglage de risque appliqué en mémoire qui se perdrait au restart).
+    const pool = [this.cfg.master as FollowerConfig, ...(this.cfg.followers ?? [])];
+    const fc = pool.find(
+      (c) =>
+        c &&
+        (match(c.label, c.accountSpec) ||
+          (!!c.accountId && c.accountId === f.accountId) ||
+          (c.label ?? "").toLowerCase() === f.label.toLowerCase()),
+    );
+    if (!fc) return { ok: false, error: `Entrée config introuvable pour ${spec} — réglage non sauvegardé.` };
+
+    if (patch.multiplier !== undefined) {
+      f.multiplier = Number(patch.multiplier);
+      fc.multiplier = f.multiplier;
+    }
+    if (patch.enabled !== undefined) {
+      f.enabled = !!patch.enabled;
+      fc.enabled = f.enabled;
+    }
+    this.persistConfig();
+    log.info(`Follower ${f.label} → ${f.enabled ? "copie ✓" : "copie ✗"} ×${f.multiplier}`);
+    return { ok: true };
   }
 
   private persistConfig(): void {
@@ -224,6 +275,7 @@ export class CopierEngine {
         accountSpec: f.accountSpec ?? "",
         multiplier: f.multiplier ?? 1,
         symbolMap: f.symbolMap ?? {},
+        enabled: f.enabled !== false,
       });
     }
 
@@ -458,9 +510,18 @@ export class CopierEngine {
     // Fire every follower in parallel for minimal latency.
     await Promise.all(
       this.followers.map(async (f) => {
-        const qty = Math.round(v.orderQty * f.multiplier);
-        const leg: MirrorLeg = { follower: f, qty, status: "pending" };
+        // floor (jamais round) : ×0.5 d'1 lot ne doit JAMAIS copier 1 lot entier —
+        // un multiplicateur fractionnaire réduit le risque, il ne l'arrondit pas vers le haut.
+        const qty = Math.floor(v.orderQty * f.multiplier + 1e-9);
+        const leg: MirrorLeg = { follower: f, qty, mult: f.multiplier, status: "pending" };
         rec.legs.push(leg);
+        // Unchecked in the dashboard → no NEW orders for this account. (Its already-
+        // copied orders keep receiving cancels/modifies via the recorded legs.)
+        if (!f.enabled) {
+          leg.status = "skipped";
+          log.info(`  ${f.label}: décoché — pas de copie`);
+          return;
+        }
         if (qty <= 0) {
           leg.status = "skipped";
           log.debug(`  ${f.label}: qty ${qty} <= 0, skipped`);
@@ -553,7 +614,9 @@ export class CopierEngine {
       rec.legs
         .filter((l) => l.status === "placed")
         .map(async (leg) => {
-          const qty = Math.round(v.orderQty * leg.follower.multiplier);
+          // Multiplicateur SNAPSHOTTÉ au placement (leg.mult) : un changement de
+          // levier en cours de route ne doit pas redimensionner un stop qui travaille.
+          const qty = Math.max(1, Math.floor(v.orderQty * leg.mult + 1e-9));
           if (this.cfg.dryRun || leg.followerOrderId === undefined) {
             log.info(`  [DRY] ${leg.follower.label}: modify order#${masterOrderId} -> qty ${qty}`);
             return;
@@ -568,6 +631,7 @@ export class CopierEngine {
           if (v.stopPrice !== undefined) body.stopPrice = v.stopPrice;
           try {
             await leg.follower.client.request("order/modifyorder", body);
+            leg.qty = qty;
             log.info(`  ${leg.follower.label}: modified order#${leg.followerOrderId} (qty ${qty})`);
           } catch (err) {
             log.error(`  ${leg.follower.label}: modify FAILED — ${String(err)}`);
@@ -636,6 +700,7 @@ export class CopierEngine {
         account: f.accountSpec || null,
         accountId: f.accountId || null,
         multiplier: f.multiplier,
+        enabled: f.enabled,
         connected: f.client.isReady,
         positions: f.accountId ? f.client.openPositions(f.accountId) : [],
       })),
