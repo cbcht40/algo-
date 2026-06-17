@@ -13,7 +13,8 @@ import { logger } from "./logger";
 const log = logger("license");
 
 const VERIFY_URL = process.env.COPIER_VERIFY_URL || "https://let-tradejournal.com/api/copier-verify";
-const RECHECK_MS = 6 * 60 * 60_000; // re-verify every 6h
+const RECHECK_MS = 6 * 60 * 60_000; // re-verify every 6h when the last check succeeded
+const RETRY_MS = 10 * 60_000; // …but after an UNREACHABLE check, retry in 10 min (not 6h)
 const GRACE_MS = 72 * 60 * 60_000; // honour last good unlock for 72h if unreachable
 const STATE_FILE = resolve(process.env.COPIER_LICENSE_STATE || ".copier-license.json");
 
@@ -89,11 +90,23 @@ export class LicenseGate {
     }
     this.loadState();
     await this.check();
-    this.timer = setInterval(() => void this.check(), RECHECK_MS);
+    this.scheduleNext();
+  }
+
+  /** Self-scheduling re-check: 6h after a reachable check, but only 10 min after
+   *  an unreachable one — so a transient blip (e.g. the Mac asleep when the timer
+   *  fired) clears the grace banner within minutes of coming back online, instead
+   *  of leaving "Reconnecte-toi à internet" up for a full 6h. */
+  private scheduleNext(): void {
+    if (this.timer) clearTimeout(this.timer);
+    const delay = this.state.reachable ? RECHECK_MS : RETRY_MS;
+    this.timer = setTimeout(() => {
+      void this.check().finally(() => this.scheduleNext());
+    }, delay);
   }
 
   stop(): void {
-    if (this.timer) clearInterval(this.timer);
+    if (this.timer) clearTimeout(this.timer);
   }
 
   async check(): Promise<void> {
