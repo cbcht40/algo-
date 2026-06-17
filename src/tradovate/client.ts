@@ -80,6 +80,7 @@ export class TradovateClient {
   private pending = new Map<number, Pending>();
   private heartbeatTimer?: NodeJS.Timeout;
   private renewTimer?: NodeJS.Timeout;
+  private reconnectTimer?: NodeJS.Timeout; // single-flight guard — at most one reconnect pending
   private backoff = 1_000;
   private closing = false;
   private authorized = false;
@@ -494,10 +495,16 @@ export class TradovateClient {
   }
 
   private scheduleReconnect(): void {
+    // Single-flight: a failed connect fires BOTH ws.on("close") and the reconnect
+    // catch, each calling this. Without this guard the reconnect loops double every
+    // cycle → a reconnection storm that keeps hammering Tradovate and turns a
+    // transient 429 into a permanent one. Only ever keep one pending reconnect.
+    if (this.closing || this.reconnectTimer) return;
     const delay = this.backoff;
     this.backoff = Math.min(this.backoff * 2, MAX_BACKOFF_MS);
     this.log.warn(`Reconnecting in ${Math.round(delay / 1000)}s…`);
-    setTimeout(async () => {
+    this.reconnectTimer = setTimeout(async () => {
+      this.reconnectTimer = undefined;
       if (this.closing) return;
       try {
         // Token may have expired while we were down — re-auth defensively.
@@ -524,6 +531,7 @@ export class TradovateClient {
     this.closing = true;
     this.stopHeartbeat();
     if (this.renewTimer) clearTimeout(this.renewTimer);
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.ws?.close();
   }
 
