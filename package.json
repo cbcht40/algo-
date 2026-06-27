@@ -1,6 +1,6 @@
 {
   "name": "tradovate-copier",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Near-instant order-replication trade copier for Tradovate (Mac-friendly, no NinjaTrader needed).",
   "author": "Let-Trade Journal",
   "type": "module",
@@ -52,10 +52,17 @@
     "directories": { "output": "release" },
     "publish": { "provider": "github", "owner": "cbcht40", "repo": "let-trade-copieur" },
     "mac": {
-      "target": "dmg",
+      "target": [
+        "dmg",
+        "zip"
+      ],
       "category": "public.app-category.finance",
-      "identity": null,
-      "icon": "icon.png"
+      "icon": "icon.png",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "notarize": true
     },
     "win": { "target": "nsis", "icon": "icon.png" }
   }
