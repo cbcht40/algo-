@@ -124,11 +124,14 @@ export class CopierEngine {
     addSpec(this.cfg.master?.label);
     for (const f of this.cfg.followers ?? []) { addSpec(f.accountSpec); addSpec(f.label); }
     const knownId = new Set<number>([this.masterAccountId, ...this.followers.map((f) => f.accountId).filter(Boolean)]);
+    // Comptes supprimés manuellement → on ne les ré-ajoute PAS (sinon le bouton Supprimer
+    // serait inutile : le rescan les ferait réapparaître).
+    const removed = new Set((this.cfg.removedSpecs ?? []).map((s) => s.toLowerCase()));
 
     const added: string[] = [];
     for (const client of this.clients.values()) {
       for (const acct of client.accounts) {
-        if (knownId.has(acct.id) || knownSpec.has(acct.name.toLowerCase())) continue;
+        if (knownId.has(acct.id) || knownSpec.has(acct.name.toLowerCase()) || removed.has(acct.name.toLowerCase())) continue;
         const fc: FollowerConfig = { label: acct.name, accountSpec: acct.name, multiplier: 1, enabled: true, accessToken: client.seedToken };
         this.cfg.followers = [...(this.cfg.followers ?? []), fc];
         this.rosterFollowers.push(fc);
@@ -187,6 +190,81 @@ export class CopierEngine {
     this.persistConfig();
     log.info(`Follower ${f.label} → ${f.enabled ? "copie ✓" : "copie ✗"} ×${f.multiplier}`);
     return { ok: true };
+  }
+
+  /** Retire un follower du copieur (bouton × du dashboard). Splice les tableaux runtime
+   *  parallèles + la config, réindexe resolvedFollowers, et mémorise le spec dans
+   *  removedSpecs pour que « Rechercher de nouveaux comptes » ne le ré-ajoute pas. Le
+   *  login n'est PAS déconnecté (d'autres followers peuvent le partager) : le compte
+   *  cesse simplement d'être mirroré. */
+  removeFollower(spec: string): { ok: boolean; error?: string } {
+    const key = (spec || "").toLowerCase();
+    const match = (label?: string, acct?: string) =>
+      (acct ?? "").toLowerCase() === key || (label ?? "").toLowerCase() === key;
+    const i = this.followers.findIndex((x) => match(x.label, x.accountSpec));
+    if (i < 0) return { ok: false, error: `Compte inconnu : ${spec}` };
+    const f = this.followers[i]!;
+
+    // Retire de la config persistée (par spec/label/accountId).
+    if (this.cfg.followers) {
+      this.cfg.followers = this.cfg.followers.filter(
+        (c) => !(match(c.label, c.accountSpec)
+          || (!!c.accountId && c.accountId === f.accountId)
+          || (c.label ?? "").toLowerCase() === f.label.toLowerCase()),
+      );
+    }
+
+    // Splice les tableaux runtime parallèles + réindexe resolvedFollowers (les index
+    // supérieurs à i se décalent de -1).
+    this.followers.splice(i, 1);
+    this.rosterFollowers.splice(i, 1);
+    const reindexed = new Set<number>();
+    for (const idx of this.resolvedFollowers) {
+      if (idx < i) reindexed.add(idx);
+      else if (idx > i) reindexed.add(idx - 1);
+    }
+    this.resolvedFollowers = reindexed;
+
+    // Ignore-list rescan (spec ET label) + nettoie l'ordre d'affichage.
+    const removed = new Set(this.cfg.removedSpecs ?? []);
+    if (f.accountSpec) removed.add(f.accountSpec);
+    removed.add(f.label);
+    this.cfg.removedSpecs = [...removed];
+    if (this.cfg.followerOrder) {
+      this.cfg.followerOrder = this.cfg.followerOrder.filter((s) => !match(s, s));
+    }
+
+    this.persistConfig();
+    log.info(`Follower retiré : ${f.label} (${this.followers.length} restant(s)).`);
+    return { ok: true };
+  }
+
+  /** Réordonne l'AFFICHAGE des followers (glisser ou flèches ↑↓ du dashboard). On persiste
+   *  juste une liste de specs ; le snapshot d'état trie dessus. Aucun tableau runtime touché
+   *  → zéro risque sur les connexions ou les index. */
+  reorderFollowers(orderedSpecs: string[]): { ok: boolean; error?: string } {
+    if (!Array.isArray(orderedSpecs)) return { ok: false, error: "ordre invalide" };
+    this.cfg.followerOrder = orderedSpecs.map((s) => String(s));
+    this.persistConfig();
+    log.info(`Ordre des followers mis à jour (${orderedSpecs.length}).`);
+    return { ok: true };
+  }
+
+  /** Followers triés selon cfg.followerOrder pour l'affichage (les non listés à la fin,
+   *  ordre naturel). Ne modifie pas this.followers. */
+  private displayFollowers(): Follower[] {
+    const order = this.cfg.followerOrder;
+    if (!order || !order.length) return this.followers;
+    const rank = new Map(order.map((s, idx) => [String(s).toLowerCase(), idx]));
+    const keyOf = (f: Follower) => (f.accountSpec || f.label || "").toLowerCase();
+    return this.followers
+      .map((f, idx) => ({ f, idx }))
+      .sort((a, b) => {
+        const ra = rank.get(keyOf(a.f)) ?? order.length + a.idx;
+        const rb = rank.get(keyOf(b.f)) ?? order.length + b.idx;
+        return ra - rb;
+      })
+      .map((x) => x.f);
   }
 
   private persistConfig(): void {
@@ -695,7 +773,7 @@ export class CopierEngine {
         connected: this.masterClient?.isReady ?? false,
         positions: this.masterAccountId ? this.masterClient.openPositions(this.masterAccountId) : [],
       },
-      followers: this.followers.map((f) => ({
+      followers: this.displayFollowers().map((f) => ({
         label: f.label,
         account: f.accountSpec || null,
         accountId: f.accountId || null,

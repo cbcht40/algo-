@@ -57,6 +57,11 @@ export interface Config {
   auth: AuthConfig;
   master: AccountConfig;
   followers: FollowerConfig[];
+  /** Comptes supprimés manuellement depuis le dashboard → rescan ne les ré-ajoute pas. */
+  removedSpecs?: string[];
+  /** Ordre d'affichage des followers dans le dashboard (specs/labels). Les followers
+   *  absents de la liste s'affichent à la fin, dans leur ordre naturel. */
+  followerOrder?: string[];
 }
 
 export function loadConfig(path: string): Config {

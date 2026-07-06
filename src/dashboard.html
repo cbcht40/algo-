@@ -90,6 +90,11 @@
   .arm-btn:hover { opacity:.85; }
   .mk-master { font-family:var(--mono); font-size:11px; font-weight:700; color:var(--accent); background:rgba(108,99,255,.1); border:1px solid rgba(108,99,255,.3); padding:5px 11px; border-radius:6px; cursor:pointer; flex:none; }
   .mk-master:hover { background:rgba(108,99,255,.2); }
+  .row-actions { display:flex; gap:4px; align-items:center; flex:none; }
+  .rbtn { font-family:var(--mono); font-size:13px; font-weight:700; color:var(--txt3); background:var(--card2); border:1px solid var(--border); width:26px; height:26px; border-radius:6px; cursor:pointer; line-height:1; display:flex; align-items:center; justify-content:center; padding:0; transition:background .12s,color .12s,border-color .12s; }
+  .rbtn:hover { color:var(--txt); border-color:var(--txt3); }
+  .rbtn:disabled { opacity:.3; cursor:default; }
+  .rbtn.del:hover { color:#fff; background:var(--red); border-color:var(--red); }
   .toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(20px); background:var(--card2); border:1px solid var(--border); color:var(--txt); font-family:var(--mono); font-size:13px; padding:11px 18px; border-radius:10px; opacity:0; pointer-events:none; transition:opacity .25s, transform .25s; z-index:50; box-shadow:0 8px 30px rgba(0,0,0,.5); }
   .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
 
@@ -158,7 +163,7 @@
     }).join('') + '</div>';
   }
 
-  function acctRow(a, isMaster) {
+  function acctRow(a, isMaster, idx, total) {
     const on = !!a.connected;
     const en = a.enabled !== false;
     const spec = a.account || a.label;
@@ -173,6 +178,11 @@
         </div>
         ${!isMaster && a.account ? `<button class="mk-master" onclick="setMaster('${esc(a.account)}')" title="Définir comme compte maître">↑ maître</button>` : ''}
         ${!isMaster ? `<span class="mult">×</span><input class="mult-in" type="number" min="0" max="100" step="0.5" value="${a.multiplier}" data-spec="${esc(spec)}" onchange="setFollowerMult('${esc(spec)}', this.value)" onkeydown="if(event.key==='Enter')this.blur()" title="Multiplicateur de taille vs le maître (ex. 2 = double ; arrondi à l'unité inférieure : 1 lot × 0,5 → ignoré)">` : ''}
+        ${!isMaster ? `<span class="row-actions">
+          <button class="rbtn" ${idx === 0 ? 'disabled' : ''} onclick="moveFollower('${esc(spec)}',-1)" title="Monter">↑</button>
+          <button class="rbtn" ${idx >= total - 1 ? 'disabled' : ''} onclick="moveFollower('${esc(spec)}',1)" title="Descendre">↓</button>
+          <button class="rbtn del" onclick="removeFollower('${esc(spec)}','${esc(a.label)}')" title="Retirer ce compte du copieur">✕</button>
+        </span>` : ''}
         <span class="state ${on ? 'on' : 'off'}">${on ? '● connecté' : '○ déconnecté'}</span>
       </div>`;
   }
@@ -211,6 +221,39 @@
     const v = parseFloat(m);
     if (!isFinite(v) || v < 0 || v > 100) { showToast('Multiplicateur invalide (0 à 100)'); return; }
     patchFollower(spec, { multiplier: v }, '✓ ' + spec + ' → ×' + v);
+  };
+
+  // Retire un compte du copieur (bouton ✕). Garde-fou "position ouverte" + confirmation.
+  window.removeFollower = (spec, label) => {
+    const s = lastState;
+    const f = ((s && s.followers) || []).find(x => (x.account || x.label) === spec);
+    if (f && (f.positions || []).length) {
+      if (!window.confirm('⚠ « ' + label + ' » a une position OUVERTE (copiée).\n\nSi tu le retires, la sortie du maître ne sera PAS copiée : la position restera ouverte sur ce compte, à gérer manuellement.\n\nRetirer quand même ?')) return;
+    }
+    if (!window.confirm('Retirer « ' + label + ' » du copieur ?\n\nIl ne recevra plus les ordres du maître, et « Rechercher de nouveaux comptes » ne le ré-ajoutera pas. (Ton compte Tradovate n\'est pas touché.)')) return;
+    (async () => {
+      try {
+        const r = await fetch('/api/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spec }) });
+        const d = await r.json().catch(() => ({}));
+        showToast(d.ok ? ('✕ ' + label + ' retiré') : ('Échec : ' + (d.error || 'erreur')));
+      } catch (_) { showToast('Serveur injoignable'); }
+      await refresh();
+    })();
+  };
+
+  // Réordonne : échange le compte avec son voisin dans la direction dir (-1 haut / +1 bas).
+  window.moveFollower = async (spec, dir) => {
+    const s = lastState; if (!s) return;
+    const order = (s.followers || []).map(f => f.account || f.label);
+    const i = order.indexOf(spec), j = i + dir;
+    if (i < 0 || j < 0 || j >= order.length) return; // bord de liste
+    [order[i], order[j]] = [order[j], order[i]];
+    try {
+      const r = await fetch('/api/reorder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order }) });
+      const d = await r.json().catch(() => ({}));
+      if (!d.ok) showToast('Échec : ' + (d.error || 'erreur'));
+    } catch (_) { showToast('Serveur injoignable'); }
+    await refresh();
   };
 
   function licBanner(lic) {
@@ -308,7 +351,7 @@
       ${acctRow(s.master, true)}
 
       <div class="section-h">Followers (${followers.length})</div>
-      ${followers.map(f => acctRow(f, false)).join('')}`;
+      ${followers.map((f, i) => acctRow(f, false, i, followers.length)).join('')}`;
     // Re-render fait → on rend sa saisie + son focus au champ multiplicateur édité.
     if (edit && edit.spec) {
       const el = document.querySelector('#top .mult-in[data-spec="' + edit.spec.replace(/"/g, '\\"') + '"]');

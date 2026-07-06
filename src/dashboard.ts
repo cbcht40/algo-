@@ -123,6 +123,35 @@ export function startDashboard(engine: CopierEngine, port = 7879): void {
       return;
     }
 
+    // Retire un follower du copieur (bouton × du dashboard).
+    if (req.method === "POST" && req.url?.startsWith("/api/remove")) {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        let result: { ok: boolean; error?: string } = { ok: false, error: "requête invalide" };
+        try { result = engine.removeFollower(String(JSON.parse(body || "{}").spec || "")); } catch { /* malformed body */ }
+        res.writeHead(result.ok ? 200 : 400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(result));
+      });
+      return;
+    }
+
+    // Réordonne l'affichage des followers (glisser / flèches ↑↓).
+    if (req.method === "POST" && req.url?.startsWith("/api/reorder")) {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        let result: { ok: boolean; error?: string } = { ok: false, error: "requête invalide" };
+        try {
+          const order = JSON.parse(body || "{}").order;
+          result = engine.reorderFollowers(Array.isArray(order) ? order.map(String) : []);
+        } catch { /* malformed body */ }
+        res.writeHead(result.ok ? 200 : 400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(result));
+      });
+      return;
+    }
+
     // Re-discover accounts on connected logins → auto-add any new one as a follower.
     if (req.method === "POST" && req.url?.startsWith("/api/rescan")) {
       engine.rescanAccounts().then(
