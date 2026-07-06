@@ -1,7 +1,7 @@
 // Electron shell for the Tradovate copier. Double-click → launches the copier
 // (if it isn't already running) and shows the local dashboard as the app window.
 // No terminal, no browser. Closing the app stops the copier it started.
-const { app, BrowserWindow, shell } = require('electron')
+const { app, BrowserWindow, shell, ipcMain } = require('electron')
 const { spawn } = require('node:child_process')
 const path = require('node:path')
 const http = require('node:http')
@@ -29,6 +29,17 @@ let win = null
 let quitting = false
 let restarting = false
 let lastWasSetup = false
+
+// État de mise à jour poussé vers la page dashboard (bandeau + bouton « Installer »).
+// Le preload redemande le statut courant ('update:ready') à chaque chargement de page,
+// donc un rechargement du dashboard (ex. changement de maître) réaffiche le bon état.
+let lastUpdateStatus = { state: 'none' }
+function sendUpdate(status) {
+  lastUpdateStatus = status
+  if (win && !win.isDestroyed()) win.webContents.send('update:status', status)
+}
+ipcMain.on('update:ready', (e) => { try { e.sender.send('update:status', lastUpdateStatus) } catch (_) { /* fenêtre partie */ } })
+ipcMain.on('update:install', () => { try { if (autoUpdater) autoUpdater.quitAndInstall() } catch (err) { console.warn('[update] install', err) } })
 
 function dashboardUp() {
   return new Promise((resolve) => {
@@ -152,7 +163,7 @@ async function createWindow() {
     minHeight: 600,
     backgroundColor: '#0a0a10',
     title: 'Let Trade Copieur',
-    webPreferences: { contextIsolation: true, nodeIntegration: false },
+    webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'preload.cjs') },
   })
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url)
@@ -168,10 +179,16 @@ app.whenReady().then(async () => {
   if (!(await dashboardUp())) startCopier()
   await createWindow()
   watchMaster()
-  // Check for updates (packaged builds only). On an unsigned macOS build this rejects
-  // harmlessly until the app is notarized; on Windows it downloads + notifies.
+  // Check for updates (packaged builds only). On télécharge en fond ET on pousse l'état
+  // vers le dashboard → bandeau in-app « Mise à jour prête → Installer et redémarrer »
+  // (plutôt que la notif système anglaise + install silencieuse au quit).
   if (app.isPackaged && autoUpdater) {
-    autoUpdater.checkForUpdatesAndNotify().catch((err) => console.warn('[update]', err?.message || err))
+    autoUpdater.autoDownload = true
+    autoUpdater.on('update-available', (info) => sendUpdate({ state: 'available', version: info && info.version }))
+    autoUpdater.on('download-progress', (p) => sendUpdate({ state: 'downloading', percent: Math.round((p && p.percent) || 0), version: lastUpdateStatus.version }))
+    autoUpdater.on('update-downloaded', (info) => sendUpdate({ state: 'ready', version: info && info.version }))
+    autoUpdater.on('error', (err) => console.warn('[update]', err?.message || err))
+    autoUpdater.checkForUpdates().catch((err) => console.warn('[update]', err?.message || err))
   }
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()

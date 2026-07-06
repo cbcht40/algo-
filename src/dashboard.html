@@ -95,6 +95,12 @@
   .rbtn:hover { color:var(--txt); border-color:var(--txt3); }
   .rbtn:disabled { opacity:.3; cursor:default; }
   .rbtn.del:hover { color:#fff; background:var(--red); border-color:var(--red); }
+  .upd { display:flex; align-items:center; gap:14px; background:linear-gradient(180deg,rgba(108,99,255,.16),rgba(108,99,255,.07)); border:1px solid rgba(108,99,255,.5); border-radius:12px; padding:12px 16px; margin-bottom:16px; }
+  .upd .upd-txt { flex:1; font-size:13.5px; font-weight:700; color:var(--txt); }
+  .upd .upd-sub { font-weight:400; color:var(--txt2); font-size:12px; }
+  .upd button { font-family:inherit; font-size:13px; font-weight:700; color:#fff; background:var(--accent); border:none; border-radius:8px; padding:9px 18px; cursor:pointer; flex:none; }
+  .upd button:hover { filter:brightness(1.12); }
+  .upd button:disabled { opacity:.6; cursor:default; }
   .toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(20px); background:var(--card2); border:1px solid var(--border); color:var(--txt); font-family:var(--mono); font-size:13px; padding:11px 18px; border-radius:10px; opacity:0; pointer-events:none; transition:opacity .25s, transform .25s; z-index:50; box-shadow:0 8px 30px rgba(0,0,0,.5); }
   .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
 
@@ -135,6 +141,7 @@
 </head>
 <body>
   <div class="wrap">
+    <div id="update-banner" class="upd" style="display:none"></div>
     <div id="top">
       <div class="offline"><div class="big pulsing">Connexion au copieur…</div></div>
     </div>
@@ -432,6 +439,31 @@
     es.onmessage = (m) => { try { addLog(JSON.parse(m.data)); } catch (_) {} };
   }
   connectSse();
+
+  // ── Bandeau de mise à jour (Electron seulement) ──────────────────────────────
+  // window.electronUpdate est injecté par le preload de l'app ; absent dans un navigateur
+  // classique → le bandeau ne s'affiche que dans l'app. Le process principal pousse l'état
+  // (téléchargement → prête) et le bouton déclenche l'installation + le redémarrage.
+  if (window.electronUpdate && typeof window.electronUpdate.onStatus === 'function') {
+    const uel = document.getElementById('update-banner');
+    window.electronUpdate.onStatus((st) => {
+      if (!uel) return;
+      if (!st || st.state === 'none') { uel.style.display = 'none'; return; }
+      const v = st.version ? ' v' + st.version : '';
+      if (st.state === 'available' || st.state === 'downloading') {
+        const pct = (st.percent != null && st.percent > 0) ? ' · ' + st.percent + '%' : '';
+        uel.style.display = 'flex';
+        uel.innerHTML = '<span class="upd-txt">⬇ Mise à jour' + esc(v) + ' en téléchargement…<span class="upd-sub">' + pct + '</span></span>';
+      } else if (st.state === 'ready') {
+        uel.style.display = 'flex';
+        uel.innerHTML = '<span class="upd-txt">✨ Mise à jour' + esc(v) + ' prête <span class="upd-sub">— installe-la quand tu veux</span></span><button id="upd-btn">Installer et redémarrer</button>';
+        const b = document.getElementById('upd-btn');
+        if (b) b.onclick = () => { b.disabled = true; b.textContent = 'Redémarrage…'; window.electronUpdate.install(); };
+      } else {
+        uel.style.display = 'none';
+      }
+    });
+  }
 </script>
 </body>
 </html>
