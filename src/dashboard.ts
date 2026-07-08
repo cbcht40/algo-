@@ -136,6 +136,19 @@ export function startDashboard(engine: CopierEngine, port = 7879): void {
       return;
     }
 
+    // Ré-affiche un compte masqué (bouton « Réafficher ») → le sort de l'ignore-list.
+    if (req.method === "POST" && req.url?.startsWith("/api/restore")) {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        let result: { ok: boolean; error?: string } = { ok: false, error: "requête invalide" };
+        try { result = engine.restoreFollower(String(JSON.parse(body || "{}").spec || "")); } catch { /* malformed body */ }
+        res.writeHead(result.ok ? 200 : 400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify(result));
+      });
+      return;
+    }
+
     // Réordonne l'affichage des followers (glisser / flèches ↑↓).
     if (req.method === "POST" && req.url?.startsWith("/api/reorder")) {
       let body = "";

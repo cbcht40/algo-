@@ -250,6 +250,21 @@ export class CopierEngine {
     return { ok: true };
   }
 
+  /** Ré-affiche un compte précédemment masqué (bouton « Réafficher » du dashboard) :
+   *  retire son spec/label de removedSpecs pour que « Rechercher de nouveaux comptes »
+   *  puisse le re-découvrir. Ne reconnecte rien et ne re-crée pas le follower ici : il
+   *  faut ensuite un rescan (login connecté) pour qu'il réapparaisse. */
+  restoreFollower(spec: string): { ok: boolean; error?: string } {
+    const key = (spec || "").toLowerCase();
+    const before = this.cfg.removedSpecs ?? [];
+    const after = before.filter((s) => String(s).toLowerCase() !== key);
+    if (after.length === before.length) return { ok: false, error: `Compte non masqué : ${spec}` };
+    this.cfg.removedSpecs = after;
+    this.persistConfig();
+    log.info(`Compte ré-affiché : ${spec} (${after.length} masqué(s) restant(s)).`);
+    return { ok: true };
+  }
+
   /** Followers triés selon cfg.followerOrder pour l'affichage (les non listés à la fin,
    *  ordre naturel). Ne modifie pas this.followers. */
   private displayFollowers(): Follower[] {
@@ -782,6 +797,7 @@ export class CopierEngine {
         connected: f.client.isReady,
         positions: f.accountId ? f.client.openPositions(f.accountId) : [],
       })),
+      removedSpecs: [...(this.cfg.removedSpecs ?? [])],
     };
   }
 
