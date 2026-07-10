@@ -100,6 +100,12 @@
   .masked-hint { color:var(--txt3); font-size:12px; line-height:1.5; margin:-2px 0 10px; max-width:640px; }
   .rbtn.restore { width:auto; padding:0 12px; gap:6px; font-size:12px; color:var(--txt2); }
   .rbtn.restore:hover { color:#fff; background:var(--accent,#6c63ff); border-color:var(--accent,#6c63ff); }
+  .acct .drag { cursor:grab; color:var(--txt3); font-size:16px; line-height:1; padding:0 2px; margin-right:2px; flex:none; user-select:none; -webkit-user-select:none; touch-action:none; }
+  .acct .drag:hover { color:var(--txt); }
+  .acct .drag:active { cursor:grabbing; }
+  .acct.drag-src { opacity:.4; }
+  .acct.drop-before { box-shadow:inset 0 3px 0 var(--accent,#6c63ff); }
+  .acct.drop-after  { box-shadow:inset 0 -3px 0 var(--accent,#6c63ff); }
   .upd { display:flex; align-items:center; gap:14px; background:linear-gradient(180deg,rgba(108,99,255,.16),rgba(108,99,255,.07)); border:1px solid rgba(108,99,255,.5); border-radius:12px; padding:12px 16px; margin-bottom:16px; }
   .upd .upd-txt { flex:1; font-size:13.5px; font-weight:700; color:var(--txt); }
   .upd .upd-sub { font-weight:400; color:var(--txt2); font-size:12px; }
@@ -179,8 +185,10 @@
     const on = !!a.connected;
     const en = a.enabled !== false;
     const spec = a.account || a.label;
+    const dz = !isMaster ? ` data-spec="${esc(spec)}" ondragover="rowDragOver(event)" ondragleave="rowDragLeave(event)" ondrop="rowDrop(event,'${esc(spec)}')"` : '';
     return `
-      <div class="acct ${isMaster ? 'master' : ''} ${!isMaster && !en ? 'nocopy' : ''}">
+      <div class="acct ${isMaster ? 'master' : ''} ${!isMaster && !en ? 'nocopy' : ''}"${dz}>
+        ${!isMaster ? `<span class="drag" draggable="true" ondragstart="rowDragStart(event,'${esc(spec)}')" ondragend="rowDragEnd(event)" title="Glisser pour réordonner">⠿</span>` : ''}
         <span class="dot ${on ? 'on' : 'off'}"></span>
         ${!isMaster ? `<label class="tgl" title="${en ? 'Copie active — décoche pour exclure ce compte' : 'Exclu de la copie — coche pour réactiver'}"><input type="checkbox" ${en ? 'checked' : ''} onchange="setFollowerEnabled('${esc(spec)}', this.checked)"><span></span></label>` : ''}
         <div class="grow">
@@ -283,19 +291,74 @@
     })();
   };
 
+  // Persiste l'ordre complet des followers (source unique : ↑↓ ET glisser-déposer).
+  // Toast de confirmation → l'utilisateur VOIT que c'est mémorisé.
+  async function persistOrder(order) {
+    try {
+      const r = await fetch('/api/reorder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order }) });
+      const d = await r.json().catch(() => ({}));
+      showToast(d.ok ? '✓ Ordre enregistré' : ('Échec : ' + (d.error || 'erreur')));
+    } catch (_) { showToast('Serveur injoignable'); }
+    await refresh();
+  }
+
   // Réordonne : échange le compte avec son voisin dans la direction dir (-1 haut / +1 bas).
-  window.moveFollower = async (spec, dir) => {
+  window.moveFollower = (spec, dir) => {
     const s = lastState; if (!s) return;
     const order = (s.followers || []).map(f => f.account || f.label);
     const i = order.indexOf(spec), j = i + dir;
     if (i < 0 || j < 0 || j >= order.length) return; // bord de liste
     [order[i], order[j]] = [order[j], order[i]];
-    try {
-      const r = await fetch('/api/reorder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order }) });
-      const d = await r.json().catch(() => ({}));
-      if (!d.ok) showToast('Échec : ' + (d.error || 'erreur'));
-    } catch (_) { showToast('Serveur injoignable'); }
-    await refresh();
+    persistOrder(order);
+  };
+
+  // ---- Glisser-déposer pour réordonner (plus simple que les ↑↓) ----
+  let dragging = false, dragSrc = null;
+  function clearDropMarks() {
+    document.querySelectorAll('.acct.drag-src,.acct.drop-before,.acct.drop-after')
+      .forEach(el => el.classList.remove('drag-src', 'drop-before', 'drop-after'));
+  }
+  window.rowDragStart = (ev, spec) => {
+    dragSrc = spec; dragging = true;
+    try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', spec); } catch (_) {}
+    const row = ev.target.closest && ev.target.closest('.acct');
+    if (row) row.classList.add('drag-src');
+  };
+  window.rowDragOver = (ev) => {
+    if (!dragging) return;
+    ev.preventDefault();
+    try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
+    const row = ev.currentTarget;
+    if (row.classList.contains('drag-src')) return;
+    const rect = row.getBoundingClientRect();
+    const after = (ev.clientY - rect.top) > rect.height / 2;
+    row.classList.toggle('drop-after', after);
+    row.classList.toggle('drop-before', !after);
+  };
+  window.rowDragLeave = (ev) => {
+    ev.currentTarget.classList.remove('drop-before', 'drop-after');
+  };
+  window.rowDrop = (ev, targetSpec) => {
+    ev.preventDefault();
+    const row = ev.currentTarget;
+    const rect = row.getBoundingClientRect();
+    const after = (ev.clientY - rect.top) > rect.height / 2;
+    const src = dragSrc;
+    dragging = false; dragSrc = null; clearDropMarks();
+    if (!src || src === targetSpec) { refresh(); return; }
+    const specs = ((lastState && lastState.followers) || []).map(f => f.account || f.label);
+    const from = specs.indexOf(src);
+    if (from < 0) { refresh(); return; }
+    specs.splice(from, 1);
+    let to = specs.indexOf(targetSpec);
+    if (to < 0) { refresh(); return; }
+    if (after) to += 1;
+    specs.splice(to, 0, src);
+    persistOrder(specs);
+  };
+  window.rowDragEnd = () => {
+    dragging = false; dragSrc = null; clearDropMarks();
+    refresh();
   };
 
   function licBanner(lic) {
@@ -364,6 +427,9 @@
   let lastState = null;
   function renderTop(s) {
     lastState = s;
+    // Pendant un glisser-déposer, ne PAS reconstruire la liste (le poll 2s effacerait
+    // le DOM en plein drag). lastState reste à jour ; le rendu reprend après le drop.
+    if (dragging) return;
     // Préserve la saisie en cours dans un champ multiplicateur SANS geler le reste
     // du panneau (un return total figerait l'état ARMÉ/positions tant que le champ
     // garde le focus — inacceptable sur un copieur live).
