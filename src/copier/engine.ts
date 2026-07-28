@@ -265,6 +265,49 @@ export class CopierEngine {
     return { ok: true };
   }
 
+  /** Bouton « Flatten All » du dashboard : met TOUS les comptes à plat — pour chaque
+   *  compte (maître + followers), annule d'abord tous les ordres en attente puis
+   *  clôture chaque position ouverte AU MARCHÉ (order/liquidateposition). DÉSARME
+   *  d'abord le copieur pour qu'une clôture du maître ne soit pas recopiée en nouvelle
+   *  position sur les followers (ils sont mis à plat directement, indépendamment). */
+  async flattenAll(): Promise<{ ok: boolean; accounts: number; canceled: number; flattened: number; skipped: string[]; errors: string[] }> {
+    const wasActive = this.active;
+    this.active = false; // panique → on coupe la copie immédiatement
+    if (wasActive) log.warn("⏸ Copieur DÉSARMÉ (Flatten All).");
+
+    type Target = { label: string; client: TradovateClient; accountId: number };
+    const targets: Target[] = [];
+    const seen = new Set<number>();
+    const add = (label: string, client: TradovateClient | undefined, accountId: number | undefined | null) => {
+      if (!client || !accountId || seen.has(accountId)) return;
+      seen.add(accountId);
+      targets.push({ label, client, accountId });
+    };
+    add(this.masterAccountSpec || this.rosterMaster?.label || "maître", this.masterClient, this.masterAccountId);
+    for (const f of this.followers) add(f.label, f.client, f.accountId);
+
+    let canceled = 0, flattened = 0;
+    const skipped: string[] = [];
+    const errors: string[] = [];
+    for (const t of targets) {
+      if (!t.client.isReady) { skipped.push(t.label); continue; }
+      // 1) annule tous les ordres en attente (limit + stop)
+      for (const o of t.client.workingOrders(t.accountId)) {
+        try { await t.client.request("order/cancelorder", { orderId: o.id }); canceled++; }
+        catch (err) { errors.push(`${t.label} annul #${o.id}: ${String(err)}`); }
+      }
+      // 2) clôture chaque position ouverte au marché
+      for (const p of t.client.openPositions(t.accountId)) {
+        try { await t.client.request("order/liquidateposition", { accountId: t.accountId, contractId: p.contractId, admin: false }); flattened++; }
+        catch (err) { errors.push(`${t.label} flatten ${p.symbol}: ${String(err)}`); }
+      }
+    }
+    const processed = targets.length - skipped.length;
+    log.info(`Flatten All → ${processed} compte(s) traité(s) · ${canceled} ordre(s) annulé(s) · ${flattened} position(s) clôturée(s)` +
+      (skipped.length ? ` · ${skipped.length} ignoré(s) (déconnecté)` : "") + (errors.length ? ` · ${errors.length} erreur(s)` : ""));
+    return { ok: errors.length === 0, accounts: processed, canceled, flattened, skipped, errors };
+  }
+
   /** Followers triés selon cfg.followerOrder pour l'affichage (les non listés à la fin,
    *  ordre naturel). Ne modifie pas this.followers. */
   private displayFollowers(): Follower[] {

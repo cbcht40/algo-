@@ -1,6 +1,6 @@
 {
   "name": "tradovate-copier",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Near-instant order-replication trade copier for Tradovate (Mac-friendly, no NinjaTrader needed).",
   "author": "Let-Trade Journal",
   "type": "module",

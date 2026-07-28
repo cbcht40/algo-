@@ -59,6 +59,7 @@
   .acct .state { font-family:var(--mono); font-size:12px; font-weight:700; }
   .acct .state.on  { color:var(--green); }
   .acct .state.off { color:var(--red); }
+  .acct .state.warn { color:var(--amber); cursor:help; }
   .tag-master { font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.08em; color:var(--accent); background:rgba(108,99,255,.12); padding:2px 7px; border-radius:5px; }
   .acct .pos { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
   .poschip { font-family:var(--mono); font-size:11px; font-weight:700; padding:2px 8px; border-radius:5px; border:1px solid var(--border); }
@@ -88,6 +89,10 @@
   .arm.off .arm-btn { background:var(--green); color:#06121d; }
   .arm.on  .arm-btn { background:transparent; color:var(--red); border-color:rgba(251,113,133,.45); }
   .arm-btn:hover { opacity:.85; }
+  .arm-actions { display:flex; align-items:center; gap:10px; flex:none; }
+  .flat-btn { font-family:var(--mono); font-size:13px; font-weight:800; letter-spacing:.03em; padding:12px 18px; border-radius:10px; cursor:pointer; flex:none; background:transparent; color:var(--red); border:1px solid rgba(251,113,133,.5); transition:opacity .15s,background .15s; }
+  .flat-btn:hover { background:var(--red); color:#fff; }
+  .flat-btn:disabled { opacity:.6; cursor:default; }
   .mk-master { font-family:var(--mono); font-size:11px; font-weight:700; color:var(--accent); background:rgba(108,99,255,.1); border:1px solid rgba(108,99,255,.3); padding:5px 11px; border-radius:6px; cursor:pointer; flex:none; }
   .mk-master:hover { background:rgba(108,99,255,.2); }
   .row-actions { display:flex; gap:4px; align-items:center; flex:none; }
@@ -185,6 +190,14 @@
     const on = !!a.connected;
     const en = a.enabled !== false;
     const spec = a.account || a.label;
+    // État : connecté ; sinon "à reconnecter" si le compte n'a jamais été résolu
+    // (session/token Tradovate absent) ; sinon simple déconnexion transitoire.
+    const resolved = isMaster ? true : !!a.accountId;
+    const stateHtml = on
+      ? '<span class="state on">● connecté</span>'
+      : (!resolved
+          ? '<span class="state warn" title="Cette session Tradovate n\'est pas connectée. Ouvre/rafraîchis ce compte dans ton navigateur (extension active) pour repousser un token frais.">⚠ session à reconnecter</span>'
+          : '<span class="state off">○ déconnecté</span>');
     const dz = !isMaster ? ` data-spec="${esc(spec)}" ondragover="rowDragOver(event)" ondragleave="rowDragLeave(event)" ondrop="rowDrop(event,'${esc(spec)}')"` : '';
     return `
       <div class="acct ${isMaster ? 'master' : ''} ${!isMaster && !en ? 'nocopy' : ''}"${dz}>
@@ -203,7 +216,7 @@
           <button class="rbtn" ${idx >= total - 1 ? 'disabled' : ''} onclick="moveFollower('${esc(spec)}',1)" title="Descendre">↓</button>
           <button class="rbtn del" onclick="removeFollower('${esc(spec)}','${esc(a.label)}')" title="Retirer ce compte du copieur">✕</button>
         </span>` : ''}
-        <span class="state ${on ? 'on' : 'off'}">${on ? '● connecté' : '○ déconnecté'}</span>
+        ${stateHtml}
       </div>`;
   }
 
@@ -382,9 +395,39 @@
             <div class="arm-sub">${active ? 'Tes ordres maître sont répliqués en temps réel.' : 'Arme le copieur avant de trader. Rien n’est copié tant qu’il est en pause.'}</div>
           </div>
         </div>
-        <button class="arm-btn" onclick="setArmed(${active ? 'false' : 'true'})">${active ? 'DÉSARMER' : 'ARMER'}</button>
+        <div class="arm-actions">
+          <button class="flat-btn" onclick="flattenAll()" title="Annule tous les ordres en attente et clôture toutes les positions, sur tous les comptes">🚨 Flatten All</button>
+          <button class="arm-btn" onclick="setArmed(${active ? 'false' : 'true'})">${active ? 'DÉSARMER' : 'ARMER'}</button>
+        </div>
       </div>`;
   }
+
+  // Bouton panique : met TOUS les comptes à plat (ordres annulés + positions clôturées).
+  window.flattenAll = async () => {
+    const s = lastState;
+    const openPos = (((s && s.master && s.master.positions) || []).length)
+      + (((s && s.followers) || []).reduce((n, f) => n + ((f.positions || []).length), 0));
+    const msg = '🚨 FLATTEN ALL — mise à plat d’urgence\n\n'
+      + 'Sur TOUS tes comptes (maître + followers) :\n'
+      + '• annuler TOUS les ordres en attente (limit + stop)\n'
+      + '• CLÔTURER toutes les positions ouvertes AU MARCHÉ'
+      + (openPos ? `\n\n(${openPos} position(s) ouverte(s) actuellement)` : '')
+      + '\n\nLe copieur sera DÉSARMÉ. Continuer ?';
+    if (!window.confirm(msg)) return;
+    const btns = document.querySelectorAll('.flat-btn'); btns.forEach(b => { b.disabled = true; b.textContent = '⏳ Mise à plat…'; });
+    try {
+      const r = await fetch('/api/flatten', { method: 'POST' });
+      const d = await r.json().catch(() => ({}));
+      if (d.error) showToast('Échec : ' + d.error);
+      else {
+        let t = `✓ ${d.accounts} compte(s) à plat · ${d.canceled} ordre(s) annulé(s) · ${d.flattened} position(s) clôturée(s)`;
+        if (d.skipped && d.skipped.length) t += ` · ${d.skipped.length} ignoré(s) (déconnecté)`;
+        if (d.errors && d.errors.length) t += ` · ⚠ ${d.errors.length} erreur(s)`;
+        showToast(t);
+      }
+    } catch (_) { showToast('Serveur injoignable'); }
+    await refresh();
+  };
 
   async function setArmed(on) {
     try {

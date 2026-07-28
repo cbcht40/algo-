@@ -20,6 +20,7 @@ import type {
   Account,
   Contract,
   Environment,
+  Order,
   Position,
   PropsEvent,
   TokenResponse,
@@ -53,6 +54,8 @@ interface Pending {
 const HEARTBEAT_MS = 2_500;
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_BACKOFF_MS = 30_000;
+/** Order statuses that are done — never cancelled by "flatten all". */
+const TERMINAL_ORDER = new Set(["Canceled", "Cancelled", "Rejected", "Expired", "Filled", "Completed"]);
 
 type EntityHandler = (ev: PropsEvent) => void;
 type StatusHandler = (status: "connected" | "disconnected" | "ready") => void;
@@ -90,6 +93,8 @@ export class TradovateClient {
   private contractCache = new Map<number, string>();
   /** accountId -> (contractId -> net position) for this login's accounts */
   private positions = new Map<number, Map<number, { netPos: number; netPrice?: number }>>();
+  /** orderId -> latest order entity (for "flatten all" — cancel working orders) */
+  private orders = new Map<number, Order>();
 
   constructor(opts: ClientOptions) {
     this.opts = opts;
@@ -98,8 +103,10 @@ export class TradovateClient {
     this.restBase = opts.restBase ?? REST_BASE[opts.environment];
     this.wsUrl = opts.wsUrl ?? WS_URL[opts.environment];
     this.log = logger(opts.label);
-    // Track net positions for every account on this login (for the dashboard).
+    // Track net positions + working orders for every account on this login
+    // (dashboard + "flatten all").
     this.onEntity((ev) => this.trackPosition(ev));
+    this.onEntity((ev) => this.trackOrder(ev));
   }
 
   onEntity(h: EntityHandler) {
@@ -424,6 +431,25 @@ export class TradovateClient {
       });
     }
     return out;
+  }
+
+  // --- working-order tracking (per account, for "flatten all") --------------
+
+  /** Keep a per-order map updated from the entity stream; drop terminal orders
+   *  so it only holds live (cancellable) ones. */
+  private trackOrder(ev: PropsEvent): void {
+    if (ev.entityType !== "order") return;
+    const o = ev.entity as unknown as Order;
+    if (typeof o.id !== "number") return;
+    if (o.ordStatus && TERMINAL_ORDER.has(o.ordStatus)) this.orders.delete(o.id);
+    else this.orders.set(o.id, o);
+  }
+
+  /** Live (non-terminal) orders for one account — what "flatten all" cancels. */
+  workingOrders(accountId: number): Order[] {
+    return [...this.orders.values()].filter(
+      (o) => o.accountId === accountId && !TERMINAL_ORDER.has(o.ordStatus),
+    );
   }
 
   // --- request/response over the socket -------------------------------------
