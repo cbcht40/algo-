@@ -9,7 +9,6 @@ import { jwtClaims } from "../tradovate/tokenStore";
 import { MasterBook } from "./masterBook";
 
 const TERMINAL_CANCEL = new Set(["Canceled", "Cancelled", "Rejected", "Expired"]);
-const FILLED = new Set(["Filled", "Completed"]);
 // Un écart de position doit persister ce délai avant d'être signalé comme « dérive »
 // (sinon la fenêtre normale de copie — maître rempli, follower pas encore — alarmerait).
 const DRIFT_GRACE_MS = 6_000;
@@ -65,6 +64,7 @@ export interface CopyEvent {
   failed: number;
   legs: Array<{ label: string; status: string; qty: number; error?: string }>;
   note?: string;
+  latencyMs?: number; // temps décision-de-copie → tous les ordres follower envoyés
 }
 
 const log = logger("engine");
@@ -669,8 +669,13 @@ export class CopierEngine {
     if (!this.handled.has(orderId)) {
       if (!v) return; // wait until we have qty/type/price
       const isWorking = o.ordStatus === "Working";
-      const isMarketFill = FILLED.has(o.ordStatus) && v.orderType === "Market";
-      if (!isWorking && !isMarketFill) return; // not actionable yet (PendingNew, etc.)
+      // Fluidité : un ordre au MARCHÉ est copié DÈS QU'IL APPARAÎT (PendingNew, etc.),
+      // sans attendre le fill du maître → le follower part en même temps que le maître,
+      // fills quasi simultanés, slippage minimal. Auparavant on attendait `Filled`, ce
+      // qui rendait les fills séquentiels (maître PUIS follower). Seul cas exclu : déjà
+      // annulé/rejeté (rien à copier). Limites/stops restent copiés sur « Working ».
+      const fireMarketNow = v.orderType === "Market" && !TERMINAL_CANCEL.has(o.ordStatus);
+      if (!isWorking && !fireMarketNow) return; // pas encore exploitable
 
       this.handled.add(orderId);
       this.mirrors.set(orderId, { legs: [], lastVersionId: v.id });
@@ -693,6 +698,7 @@ export class CopierEngine {
   // --- replication primitives ----------------------------------------------
 
   private async mirrorNew(o: Order, v: OrderVersion): Promise<void> {
+    const t0 = Date.now(); // mesure de fluidité : décision de copie → ordres envoyés
     const symbol = await this.masterClient.contractName(o.contractId);
     const rec = this.mirrors.get(o.id);
     if (!rec) return;
@@ -808,6 +814,7 @@ export class CopierEngine {
       ok: rec.legs.filter((l) => l.status === "placed").length,
       failed: rec.legs.filter((l) => l.status === "failed").length,
       legs: rec.legs.map((l) => ({ label: l.follower.label, status: l.status, qty: l.qty, error: l.error })),
+      latencyMs: Date.now() - t0,
     });
   }
 

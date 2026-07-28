@@ -144,6 +144,8 @@
   .logrow .chip.cancel { color:var(--amber); }
   .logrow .chip.modify { color:var(--txt); }
   .logrow .chip.blocked { color:var(--red); }
+  .logrow .lat { color:var(--txt3); font-weight:600; }
+  .logrow .lat.slow { color:var(--amber); }
   .logrow .desc { color:var(--txt); font-weight:600; font-size:13.5px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .logrow .res { font-size:12.5px; font-weight:700; flex:none; }
   .logrow .res.ok   { color:var(--green); }
@@ -617,7 +619,11 @@
     let res;
     if (e.kind === 'blocked') res = '🔒 non copié';
     else if (e.kind === 'cancel') res = `${e.ok} annulé(s)`;
-    else res = `${e.ok}/${total} ✓` + (failed ? ` · ${failed} échec(s)` : '');
+    else {
+      res = `${e.ok}/${total} ✓` + (failed ? ` · ${failed} échec(s)` : '');
+      // Compteur de fluidité : temps décision→ordres envoyés (mesure du slippage de copie).
+      if (e.kind === 'new' && e.latencyMs != null) res += ` · <span class="lat ${e.latencyMs > 500 ? 'slow' : ''}">${e.latencyMs} ms</span>`;
+    }
 
     const fresh = (Date.now() - (e.ts || 0)) < 4000;
     const row = $(`<div class="logrow ${cls} ${fresh ? 'flash' : ''}">
