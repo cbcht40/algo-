@@ -31,5 +31,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: windows-installer
-          path: release/*.exe
+          # latest.yml est OBLIGATOIRE pour l'auto-update Windows (electron-updater le
+          # fetch avant tout) ; le .blockmap permet les mises à jour différentielles.
+          path: |
+            release/*.exe
+            release/*.exe.blockmap
+            release/latest.yml
           if-no-files-found: error
