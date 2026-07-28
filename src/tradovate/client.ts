@@ -326,6 +326,23 @@ export class TradovateClient {
     return this.accounts;
   }
 
+  /** Manual « Actualiser » depuis le dashboard. Socket déjà OK → simple re-sync des
+   *  comptes (re-résout un compte pas encore vu). Socket down → reconnexion IMMÉDIATE
+   *  (on court-circuite le backoff) avec le token le plus frais qu'on ait. Un token
+   *  EXPIRÉ échoue à l'auth et `start()` throw — rien à faire sans que l'extension
+   *  pousse un token frais (session Tradovate ouverte). */
+  async refresh(): Promise<void> {
+    if (this.isReady) { await this.reSyncAccounts(); return; }
+    // Annule un reconnect en attente + détache proprement un socket demi-ouvert
+    // (sans son handler `close` qui relancerait un reconnect concurrent → storm).
+    if (this.reconnectTimer) { clearTimeout(this.reconnectTimer); this.reconnectTimer = undefined; }
+    const stale = this.ws;
+    this.ws = undefined;
+    if (stale) { try { stale.removeAllListeners(); stale.on("error", () => {}); stale.close(); } catch { /* ignore */ } }
+    this.closing = false;
+    await this.start();
+  }
+
   private async syncRequest(): Promise<void> {
     const msg = await this.request("user/syncrequest", { users: [this.userId] });
     const d = msg.d ?? {};

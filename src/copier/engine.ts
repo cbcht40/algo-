@@ -265,6 +265,25 @@ export class CopierEngine {
     return { ok: true };
   }
 
+  /** Bouton « Actualiser » d'un compte : force une reconnexion immédiate de son login
+   *  (si down) + re-sync + re-résolution, puis renvoie l'état. Ne peut PAS ranimer un
+   *  token expiré — dans ce cas `connected` reste faux et l'UI invite à rouvrir la
+   *  session Tradovate (l'extension pousse alors un token frais). */
+  async refreshFollower(spec: string): Promise<{ ok: boolean; connected: boolean; resolved: boolean; error?: string }> {
+    const key = (spec || "").toLowerCase();
+    const match = (label?: string, acct?: string) =>
+      (acct ?? "").toLowerCase() === key || (label ?? "").toLowerCase() === key;
+    const f = this.followers.find((x) => match(x.label, x.accountSpec));
+    if (!f) return { ok: false, connected: false, resolved: false, error: `Compte inconnu : ${spec}` };
+    try {
+      await f.client.refresh();
+      this.onLoginReady(f.client); // re-résout les followers de ce login
+      return { ok: true, connected: f.client.isReady, resolved: !!f.accountId };
+    } catch (err) {
+      return { ok: false, connected: f.client.isReady, resolved: !!f.accountId, error: String((err as Error)?.message || err) };
+    }
+  }
+
   /** Bouton « Flatten All » du dashboard : met TOUS les comptes à plat — pour chaque
    *  compte (maître + followers), annule d'abord tous les ordres en attente puis
    *  clôture chaque position ouverte AU MARCHÉ (order/liquidateposition). DÉSARME

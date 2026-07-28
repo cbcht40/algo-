@@ -172,6 +172,21 @@ export function startDashboard(engine: CopierEngine, port = 7879): void {
       return;
     }
 
+    // « Actualiser » un compte : reconnexion immédiate de son login + re-résolution.
+    if (req.method === "POST" && req.url?.startsWith("/api/refresh")) {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        let spec = "";
+        try { spec = String(JSON.parse(body || "{}").spec || ""); } catch { /* malformed body */ }
+        engine.refreshFollower(spec).then(
+          (r) => { res.writeHead(r.ok || r.connected ? 200 : 400, { "Content-Type": "application/json" }); res.end(JSON.stringify(r)); },
+          (err) => { res.writeHead(500, { "Content-Type": "application/json" }); res.end(JSON.stringify({ ok: false, error: String(err) })); },
+        );
+      });
+      return;
+    }
+
     // « Flatten All » : met tous les comptes à plat (annule les ordres + clôture les positions).
     if (req.method === "POST" && req.url?.startsWith("/api/flatten")) {
       engine.flattenAll().then(
