@@ -5,7 +5,7 @@
 //   GET  /api/events  -> live order-copy log (Server-Sent Events stream)
 import { createServer, type ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
-import { logger } from "./logger";
+import { logger, recentLogs } from "./logger";
 import type { CopierEngine, CopyEvent } from "./copier/engine";
 
 const log = logger("dashboard");
@@ -38,6 +38,13 @@ export function startDashboard(engine: CopierEngine, port = 7879): void {
     if (req.method === "GET" && req.url?.startsWith("/api/state")) {
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify(engine.dashboardState()));
+      return;
+    }
+
+    // Journal technique : dernières lignes de log du moteur (diagnostic + support).
+    if (req.method === "GET" && req.url?.startsWith("/api/logs")) {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ lines: recentLogs(300) }));
       return;
     }
 

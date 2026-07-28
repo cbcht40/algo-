@@ -39,7 +39,27 @@ function sendUpdate(status) {
   if (win && !win.isDestroyed()) win.webContents.send('update:status', status)
 }
 ipcMain.on('update:ready', (e) => { try { e.sender.send('update:status', lastUpdateStatus) } catch (_) { /* fenêtre partie */ } })
-ipcMain.on('update:install', () => { try { if (autoUpdater) autoUpdater.quitAndInstall() } catch (err) { console.warn('[update] install', err) } })
+
+// Espace libre requis pour installer : ShipIt dézippe la nouvelle app (~250 Mo) PUIS
+// échange le bundle dans /Applications → il faut de la marge, sinon l'install échoue en
+// silence (le bouton tournait à l'infini). On pré-vérifie et on remonte une vraie erreur.
+const MIN_FREE_INSTALL = 600 * 1024 * 1024
+function freeBytes(dir) {
+  try { const s = fs.statfsSync(dir); return s.bavail * s.bsize } catch (_) { return null }
+}
+ipcMain.on('update:install', () => {
+  const free = freeBytes(dataDir())
+  if (free !== null && free < MIN_FREE_INSTALL) {
+    sendUpdate({ state: 'error', version: lastUpdateStatus.version,
+      message: `Espace disque insuffisant (${Math.round(free / 1048576)} Mo libres) — libère ~1 Go, puis réessaie.` })
+    return
+  }
+  try { if (autoUpdater) autoUpdater.quitAndInstall() }
+  catch (err) {
+    console.warn('[update] install', err)
+    sendUpdate({ state: 'error', version: lastUpdateStatus.version, message: String((err && err.message) || err) })
+  }
+})
 
 function dashboardUp() {
   return new Promise((resolve) => {
@@ -68,6 +88,12 @@ async function waitForDashboard(tries = 60) {
 
 function startCopier() {
   const env = { ...process.env }
+  // Persistent engine log (stdout is lost when launched from Finder) → user-data/logs.
+  try {
+    const logDir = path.join(dataDir(), 'logs')
+    fs.mkdirSync(logDir, { recursive: true })
+    env.COPIER_LOG_FILE = path.join(logDir, 'copier.log')
+  } catch (_) { /* logging is best-effort — never block startup */ }
   lastWasSetup = !fs.existsSync(path.join(dataDir(), 'config.json'))
   let cmd
   let args
@@ -187,7 +213,11 @@ app.whenReady().then(async () => {
     autoUpdater.on('update-available', (info) => sendUpdate({ state: 'available', version: info && info.version }))
     autoUpdater.on('download-progress', (p) => sendUpdate({ state: 'downloading', percent: Math.round((p && p.percent) || 0), version: lastUpdateStatus.version }))
     autoUpdater.on('update-downloaded', (info) => sendUpdate({ state: 'ready', version: info && info.version }))
-    autoUpdater.on('error', (err) => console.warn('[update]', err?.message || err))
+    autoUpdater.on('error', (err) => {
+      const message = (err && (err.message || String(err))) || 'erreur inconnue'
+      console.warn('[update]', message)
+      sendUpdate({ state: 'error', version: lastUpdateStatus.version, message })
+    })
     autoUpdater.checkForUpdates().catch((err) => console.warn('[update]', err?.message || err))
   }
   app.on('activate', () => {
