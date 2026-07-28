@@ -60,6 +60,10 @@
   .acct .state.on  { color:var(--green); }
   .acct .state.off { color:var(--red); }
   .acct .state.warn { color:var(--amber); cursor:help; }
+  .acct.drifting { border-color:rgba(251,113,133,.55); box-shadow:inset 3px 0 0 var(--red); }
+  .acct .drift { margin-top:8px; font-family:var(--mono); font-size:12px; font-weight:700; color:var(--red); background:rgba(251,113,133,.10); border:1px solid rgba(251,113,133,.35); border-radius:7px; padding:6px 10px; }
+  .acct .drift b { color:var(--red); }
+  .drift-banner { background:linear-gradient(180deg,rgba(251,113,133,.16),rgba(251,113,133,.07)); border:1px solid rgba(251,113,133,.5); border-radius:12px; padding:11px 16px; margin-bottom:14px; font-size:13.5px; color:var(--txt); }
   .tag-master { font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.08em; color:var(--accent); background:rgba(108,99,255,.12); padding:2px 7px; border-radius:5px; }
   .acct .pos { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
   .poschip { font-family:var(--mono); font-size:11px; font-weight:700; padding:2px 8px; border-radius:5px; border:1px solid var(--border); }
@@ -204,10 +208,21 @@
     }).join('') + '</div>';
   }
 
+  // Bandeau de dérive d'un compte : sa position réelle ≠ celle attendue depuis le maître.
+  function driftStrip(drift) {
+    const ds = drift || [];
+    if (!ds.length) return '';
+    const sgn = n => (n >= 0 ? '+' : '') + n;
+    return '<div class="drift">⚠ DÉSYNC — ' + ds.map(d =>
+      esc(d.symbol) + ' : attendu <b>' + sgn(d.expected) + '</b> · réel <b>' + sgn(d.actual) + '</b>'
+    ).join(' &nbsp;·&nbsp; ') + '</div>';
+  }
+
   function acctRow(a, isMaster, idx, total) {
     const on = !!a.connected;
     const en = a.enabled !== false;
     const spec = a.account || a.label;
+    const drifting = !isMaster && (a.drift || []).length > 0;
     // État : connecté ; sinon "à reconnecter" si le compte n'a jamais été résolu
     // (session/token Tradovate absent) ; sinon simple déconnexion transitoire.
     const resolved = isMaster ? true : !!a.accountId;
@@ -218,7 +233,7 @@
           : '<span class="state off">○ déconnecté</span>');
     const dz = !isMaster ? ` data-spec="${esc(spec)}" ondragover="rowDragOver(event)" ondragleave="rowDragLeave(event)" ondrop="rowDrop(event,'${esc(spec)}')"` : '';
     return `
-      <div class="acct ${isMaster ? 'master' : ''} ${!isMaster && !en ? 'nocopy' : ''}"${dz}>
+      <div class="acct ${isMaster ? 'master' : ''} ${!isMaster && !en ? 'nocopy' : ''} ${drifting ? 'drifting' : ''}"${dz}>
         ${!isMaster ? `<span class="drag" draggable="true" ondragstart="rowDragStart(event,'${esc(spec)}')" ondragend="rowDragEnd(event)" title="Glisser pour réordonner">⠿</span>` : ''}
         <span class="dot ${on ? 'on' : 'off'}"></span>
         ${!isMaster ? `<label class="tgl" title="${en ? 'Copie active — décoche pour exclure ce compte' : 'Exclu de la copie — coche pour réactiver'}"><input type="checkbox" ${en ? 'checked' : ''} onchange="setFollowerEnabled('${esc(spec)}', this.checked)"><span></span></label>` : ''}
@@ -226,6 +241,7 @@
           <div class="name">${esc(a.label)} ${isMaster ? '<span class="tag-master">MAÎTRE</span>' : ''}${!isMaster && !en ? ' <span class="tag-off">NE COPIE PAS</span>' : ''}</div>
           <div class="meta">${a.account ? esc(a.account) : '— compte non résolu —'}${a.accountId ? ' · #' + a.accountId : ''}</div>
           ${posStrip(a.positions)}
+          ${!isMaster ? driftStrip(a.drift) : ''}
         </div>
         ${!isMaster && a.account ? `<button class="mk-master" onclick="setMaster('${esc(a.account)}')" title="Définir comme compte maître">↑ maître</button>` : ''}
         ${!isMaster ? `<span class="mult">×</span><input class="mult-in" type="number" min="0" max="100" step="0.5" value="${a.multiplier}" data-spec="${esc(spec)}" onchange="setFollowerMult('${esc(spec)}', this.value)" onkeydown="if(event.key==='Enter')this.blur()" title="Multiplicateur de taille vs le maître (ex. 2 = double ; arrondi à l'unité inférieure : 1 lot × 0,5 → ignoré)">` : ''}
@@ -417,6 +433,14 @@
     return `<div class="lic err">🔒 Copie désactivée — abonnement <b>Edge</b> requis${lic.plan ? ` (plan actuel : <b>${esc(lic.plan)}</b>)` : ''}. La lecture du dashboard reste disponible.</div>`;
   }
 
+  // Bandeau récap : au moins un follower est désynchronisé du maître.
+  function driftBanner(followers) {
+    const bad = (followers || []).filter(f => (f.drift || []).length);
+    if (!bad.length) return '';
+    const names = bad.map(f => esc(f.label)).join(', ');
+    return `<div class="drift-banner">⚠ <b>${bad.length} compte(s) désynchronisé(s)</b> du maître (${names}) — position réelle ≠ attendue. Vérifie les comptes marqués ci-dessous.</div>`;
+  }
+
   function armBar(active) {
     return `
       <div class="arm ${active ? 'on' : 'off'}">
@@ -520,6 +544,7 @@
     document.getElementById('top').innerHTML = `
       ${armBar(!!s.active)}
       ${licBanner(lic)}
+      ${driftBanner(followers)}
       <header>
         <h1><svg class="logo" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="9.1" stroke="currentColor" stroke-width="1.8"/><path d="M16 9.4 Q16 16 22.6 16 Q16 16 16 22.6 Q16 16 9.4 16 Q16 16 16 9.4 Z" fill="currentColor"/></svg>Let Trade Copieur</h1>
         <span class="badge ${env === 'live' ? 'live' : 'demo'}">${esc(s.environment || '?')}</span>

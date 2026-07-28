@@ -10,6 +10,17 @@ import { MasterBook } from "./masterBook";
 
 const TERMINAL_CANCEL = new Set(["Canceled", "Cancelled", "Rejected", "Expired"]);
 const FILLED = new Set(["Filled", "Completed"]);
+// Un écart de position doit persister ce délai avant d'être signalé comme « dérive »
+// (sinon la fenêtre normale de copie — maître rempli, follower pas encore — alarmerait).
+const DRIFT_GRACE_MS = 6_000;
+
+/** Écart de position maître↔follower sur un symbole. */
+interface DriftEntry {
+  symbol: string;
+  expected: number; // ce que le follower DEVRAIT porter (net maître × multiplicateur)
+  actual: number; // ce qu'il porte réellement
+  delta: number; // actual - expected (≠ 0 = désync)
+}
 
 interface Follower {
   label: string;
@@ -84,6 +95,10 @@ export class CopierEngine {
   private rosterMaster!: AccountConfig;
   private rosterFollowers: FollowerConfig[] = [];
   private masterSpec = "";
+  // Détection de dérive (position réelle du follower vs attendue depuis le maître).
+  private driftTimer?: NodeJS.Timeout;
+  private driftSince = new Map<string, { since: number; logged: boolean }>();
+  private confirmedDrift = new Map<string, DriftEntry[]>();
 
   constructor(cfg: Config) {
     this.cfg = cfg;
@@ -460,6 +475,72 @@ export class CopierEngine {
       );
     }
     log.info("Copier is live. Ready logins mirror immediately; place a trade on the master account.");
+
+    // Surveillance de la dérive : compare en continu la position réelle de chaque
+    // follower à celle attendue depuis le maître (une copie ratée = follower désync).
+    this.driftTimer = setInterval(() => {
+      try { this.evaluateDrift(); } catch (err) { log.warn(`drift eval: ${String(err)}`); }
+    }, 3_000);
+  }
+
+  /** Position attendue d'un follower : net maître × multiplicateur, arrondi vers zéro
+   *  comme la copie (floor de la valeur absolue). Exact pour un multiplicateur entier ;
+   *  approché pour un fractionnaire (la copie floore CHAQUE ordre, pas la position). */
+  private scaledExpected(masterNet: number, mult: number): number {
+    return Math.sign(masterNet) * Math.floor(Math.abs(masterNet) * mult + 1e-9);
+  }
+
+  /** Écarts de position par symbole entre ce follower et l'attendu (tient compte du
+   *  symbolMap). Vide si le follower est décoché, déconnecté, non résolu, ou si le
+   *  maître n'est pas prêt (on ne peut alors rien comparer de fiable). */
+  private computeFollowerDrift(f: Follower): DriftEntry[] {
+    if (!f.enabled || !f.client.isReady || !f.accountId || !this.masterAccountId || !this.masterClient?.isReady) return [];
+    const expected = new Map<string, number>();
+    for (const p of this.masterClient.openPositions(this.masterAccountId)) {
+      const fs = f.symbolMap[p.symbol] ?? p.symbol; // symbole côté follower
+      expected.set(fs, (expected.get(fs) ?? 0) + this.scaledExpected(p.netPos, f.multiplier));
+    }
+    const actual = new Map<string, number>();
+    for (const p of f.client.openPositions(f.accountId)) {
+      actual.set(p.symbol, (actual.get(p.symbol) ?? 0) + p.netPos);
+    }
+    const out: DriftEntry[] = [];
+    for (const s of new Set([...expected.keys(), ...actual.keys()])) {
+      const e = expected.get(s) ?? 0;
+      const a = actual.get(s) ?? 0;
+      if (e !== a) out.push({ symbol: s, expected: e, actual: a, delta: a - e });
+    }
+    return out;
+  }
+
+  /** Évalue la dérive de tous les followers. Un écart doit PERSISTER DRIFT_GRACE_MS
+   *  avant d'être « confirmé » (évite les faux positifs de la fenêtre de copie). Chaque
+   *  dérive nouvellement confirmée est loguée une seule fois. Résultat lu par le dashboard. */
+  private evaluateDrift(): void {
+    const now = Date.now();
+    const seen = new Set<string>();
+    const byFollower = new Map<string, DriftEntry[]>();
+    const sgn = (n: number) => (n >= 0 ? "+" : "") + n;
+    for (const f of this.followers) {
+      const confirmed: DriftEntry[] = [];
+      for (const d of this.computeFollowerDrift(f)) {
+        const key = `${f.label}|${d.symbol}`;
+        seen.add(key);
+        let rec = this.driftSince.get(key);
+        if (!rec) { rec = { since: now, logged: false }; this.driftSince.set(key, rec); }
+        if (now - rec.since >= DRIFT_GRACE_MS) {
+          confirmed.push(d);
+          if (!rec.logged) {
+            rec.logged = true;
+            log.warn(`⚠ DÉRIVE ${f.label} ${d.symbol} : attendu ${sgn(d.expected)}, réel ${sgn(d.actual)} (écart ${sgn(d.delta)})`);
+          }
+        }
+      }
+      if (confirmed.length) byFollower.set(f.label, confirmed);
+    }
+    // Purge les écarts résolus (plus vus ce tour).
+    for (const key of [...this.driftSince.keys()]) if (!seen.has(key)) this.driftSince.delete(key);
+    this.confirmedDrift = byFollower;
   }
 
   /** Resolve the exact account behind a config entry on a given login. */
@@ -858,6 +939,7 @@ export class CopierEngine {
         enabled: f.enabled,
         connected: f.client.isReady,
         positions: f.accountId ? f.client.openPositions(f.accountId) : [],
+        drift: this.confirmedDrift.get(f.label) ?? [], // écarts de position confirmés
       })),
       removedSpecs: [...(this.cfg.removedSpecs ?? [])],
     };
@@ -878,6 +960,7 @@ export class CopierEngine {
   }
 
   async stop(): Promise<void> {
+    if (this.driftTimer) { clearInterval(this.driftTimer); this.driftTimer = undefined; }
     await Promise.all([...this.clients.values()].map((c) => c.stop()));
   }
 }
