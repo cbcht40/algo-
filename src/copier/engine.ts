@@ -490,25 +490,49 @@ export class CopierEngine {
     return Math.sign(masterNet) * Math.floor(Math.abs(masterNet) * mult + 1e-9);
   }
 
-  /** Écarts de position par symbole entre ce follower et l'attendu (tient compte du
-   *  symbolMap). Vide si le follower est décoché, déconnecté, non résolu, ou si le
-   *  maître n'est pas prêt (on ne peut alors rien comparer de fiable). */
+  /** Écarts de position entre ce follower et l'attendu. Vide si le follower est décoché,
+   *  déconnecté, non résolu, ou si le maître n'est pas prêt.
+   *
+   *  IMPORTANT : on matche par `contractId` (identique d'un compte à l'autre), PAS par
+   *  nom de symbole. Le nom (`contractCache`) est résolu PAR CLIENT : un follower qui
+   *  n'a pas encore le nom d'un contrat renvoie « #<id> » → comparer par nom créait de
+   *  fausses désync (« MNQU6 attendu +2 » ET « #4399654 réel +2 » pour la même position).
+   *  Seul le symbolMap (contrats DIFFÉRENTS) se compare par nom du symbole mappé. */
   private computeFollowerDrift(f: Follower): DriftEntry[] {
     if (!f.enabled || !f.client.isReady || !f.accountId || !this.masterAccountId || !this.masterClient?.isReady) return [];
-    const expected = new Map<string, number>();
-    for (const p of this.masterClient.openPositions(this.masterAccountId)) {
-      const fs = f.symbolMap[p.symbol] ?? p.symbol; // symbole côté follower
-      expected.set(fs, (expected.get(fs) ?? 0) + this.scaledExpected(p.netPos, f.multiplier));
-    }
-    const actual = new Map<string, number>();
-    for (const p of f.client.openPositions(f.accountId)) {
-      actual.set(p.symbol, (actual.get(p.symbol) ?? 0) + p.netPos);
+    const folPos = f.client.openPositions(f.accountId).filter((p) => p.netPos);
+    const folById = new Map<number, number>();
+    const folBySym = new Map<string, { net: number; contractId: number }>();
+    for (const p of folPos) {
+      folById.set(p.contractId, (folById.get(p.contractId) ?? 0) + p.netPos);
+      folBySym.set(p.symbol, { net: (folBySym.get(p.symbol)?.net ?? 0) + p.netPos, contractId: p.contractId });
     }
     const out: DriftEntry[] = [];
-    for (const s of new Set([...expected.keys(), ...actual.keys()])) {
-      const e = expected.get(s) ?? 0;
-      const a = actual.get(s) ?? 0;
-      if (e !== a) out.push({ symbol: s, expected: e, actual: a, delta: a - e });
+    const consumed = new Set<number>(); // contractIds follower déjà comparés
+    for (const p of this.masterClient.openPositions(this.masterAccountId)) {
+      if (!p.netPos) continue;
+      const expected = this.scaledExpected(p.netPos, f.multiplier);
+      const mapped = f.symbolMap[p.symbol];
+      let actual: number;
+      let display: string;
+      let cid: number;
+      if (mapped !== undefined) {
+        const hit = folBySym.get(mapped); // contrat différent → match par nom mappé
+        actual = hit?.net ?? 0;
+        display = mapped;
+        cid = hit?.contractId ?? -1;
+      } else {
+        actual = folById.get(p.contractId) ?? 0; // même contrat → match par contractId
+        display = p.symbol; // nom résolu côté maître (jamais « #id »)
+        cid = p.contractId;
+      }
+      if (cid >= 0) consumed.add(cid);
+      if (expected !== actual) out.push({ symbol: display, expected, actual, delta: actual - expected });
+    }
+    // Positions détenues par le follower que le maître n'a pas (dérive inverse).
+    for (const p of folPos) {
+      if (consumed.has(p.contractId)) continue;
+      out.push({ symbol: p.symbol, expected: 0, actual: p.netPos, delta: p.netPos });
     }
     return out;
   }
@@ -925,6 +949,20 @@ export class CopierEngine {
   /** Per-ACCOUNT state for the local dashboard (port 7879). `connected` = the
    *  underlying login's websocket is authorized + open. */
   dashboardState() {
+    const followers = this.displayFollowers();
+    const masterPos = this.masterAccountId ? this.masterClient.openPositions(this.masterAccountId) : [];
+    const folPos = followers.map((f) => (f.accountId ? f.client.openPositions(f.accountId) : []));
+    // Le nom d'un contrat est résolu PAR CLIENT : un compte peut renvoyer « #<id> ».
+    // On construit un annuaire contractId→nom depuis TOUS les comptes qui, eux, ont le
+    // nom, puis on remplace les « #<id> » à l'affichage (sinon le dashboard montre
+    // « #4399654 » au lieu de « MNQU6 »).
+    const nameById = new Map<number, string>();
+    const collect = (ps: Array<{ symbol: string; contractId: number }>) =>
+      ps.forEach((p) => { if (!p.symbol.startsWith("#")) nameById.set(p.contractId, p.symbol); });
+    collect(masterPos);
+    folPos.forEach(collect);
+    const named = <T extends { symbol: string; contractId: number }>(ps: T[]): T[] =>
+      ps.map((p) => (p.symbol.startsWith("#") && nameById.has(p.contractId) ? { ...p, symbol: nameById.get(p.contractId)! } : p));
     return {
       environment: this.cfg.environment,
       dryRun: this.cfg.dryRun,
@@ -936,16 +974,16 @@ export class CopierEngine {
         account: this.masterAccountSpec || null,
         accountId: this.masterAccountId || null,
         connected: this.masterClient?.isReady ?? false,
-        positions: this.masterAccountId ? this.masterClient.openPositions(this.masterAccountId) : [],
+        positions: named(masterPos),
       },
-      followers: this.displayFollowers().map((f) => ({
+      followers: followers.map((f, i) => ({
         label: f.label,
         account: f.accountSpec || null,
         accountId: f.accountId || null,
         multiplier: f.multiplier,
         enabled: f.enabled,
         connected: f.client.isReady,
-        positions: f.accountId ? f.client.openPositions(f.accountId) : [],
+        positions: named(folPos[i]!),
         drift: this.confirmedDrift.get(f.label) ?? [], // écarts de position confirmés
       })),
       removedSpecs: [...(this.cfg.removedSpecs ?? [])],
