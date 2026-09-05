@@ -13,6 +13,7 @@ import type { LicenseGate } from "../license";
 import { logger } from "../logger";
 import { TradovateClient, type ClientOptions } from "../tradovate/client";
 import { MarketDataClient, type Quote } from "../tradovate/marketData";
+import type { JournalLink, ScoreRequest } from "../journal";
 import type { Account, Environment, Fill, Order, OrderAction, OrderVersion, Position, PropsEvent } from "../tradovate/types";
 import { jwtClaims } from "../tradovate/tokenStore";
 
@@ -385,6 +386,8 @@ export class GroupEngine {
 
   /** Incidents (échecs par compte) + leur relance. */
   private incidents = new Map<string, Incident & { retry: () => Promise<void>; account: GroupAccount }>();
+  /** Lien avec Let-Trade Journal (synchro des trades clôturés + avis IA à l'entrée). */
+  private journal?: JournalLink;
   /** Flux de marché (cotations) : un socket, alimenté par le token du premier login prêt. */
   private md?: MarketDataClient;
   private watched = new Map<string, number>(); // symbole surveillé par le panneau → dernier vu
@@ -412,6 +415,35 @@ export class GroupEngine {
 
   setLicenseGate(gate: LicenseGate): void {
     this.gate = gate;
+  }
+
+  setJournal(j: JournalLink): void {
+    this.journal = j;
+  }
+
+  /** Synchro manuelle du journal (bouton du dashboard). */
+  journalSyncNow(force = true) {
+    return this.journal ? this.journal.syncNow(force, "manual") : Promise.resolve(null);
+  }
+
+  /** Demande l'avis IA sur une entrée (après envoi, jamais bloquant) et le journalise. */
+  private askScore(req: ScoreRequest): void {
+    if (!this.journal?.enabled) return;
+    void this.journal.scoreEntry(req).then((r) => {
+      if (!r) return;
+      this.emit({
+        ts: Date.now(),
+        kind: "info",
+        symbol: req.symbol,
+        action: req.action,
+        qty: req.qty,
+        ok: r.error ? 0 : 1,
+        failed: r.error ? 1 : 0,
+        skipped: 0,
+        legs: [],
+        note: r.error ? `avis IA indisponible — ${r.error}` : `Avis IA ${r.score}/100 · ${r.headline}`,
+      });
+    });
   }
   setPersistPath(path: string): void {
     this.configPath = path;
@@ -757,6 +789,8 @@ export class GroupEngine {
     if (p.netPos) return;
     const acct = this.accounts.find((a) => a.client === client && a.accountId === p.accountId);
     if (!acct) return;
+    // Position clôturée → le journal tire le trade tout de suite (regroupé sur 8 s).
+    this.journal?.positionClosed(acct.label);
     setTimeout(() => {
       const still = client.openPositions(p.accountId).some((q) => q.contractId === p.contractId && q.netPos);
       if (still) return;
@@ -993,6 +1027,15 @@ export class GroupEngine {
       note: wantBracket ? `SL ${req.bracket?.stopTicks ?? "—"} / TP ${req.bracket?.targetTicks ?? "—"} ticks au fill` : undefined,
     };
     this.emit(ev);
+    if (ev.ok > 0) {
+      const q = this.md?.quote(symbol);
+      this.askScore({
+        symbol, action: req.action, qty, orderType: req.orderType,
+        price: req.price ?? req.stopPrice ?? q?.last ?? undefined,
+        stopTicks: req.bracket?.stopTicks, targetTicks: req.bracket?.targetTicks, tickSize: inst?.tickSize ?? this.instruments.get(symbol)?.tickSize,
+        accounts: ev.ok, source: "panneau", ts: Date.now(),
+      });
+    }
     return ev;
   }
 
@@ -1147,6 +1190,27 @@ export class GroupEngine {
       note: this.relayNote(source, delay, extra),
     };
     this.emit(ev);
+    // La source a pris la position quoi qu'il arrive → avis IA (copies ou pas).
+    {
+      const q = this.md?.quote(symbol);
+      const inst = this.instruments.get(symbol);
+      const tick = inst?.tickSize;
+      let stopTicks: number | undefined;
+      let targetTicks: number | undefined;
+      if (endpoint === "orderstrategy/startorderstrategy" && tick) {
+        try {
+          const p = JSON.parse(String(body.params ?? "{}"));
+          const b = Array.isArray(p?.brackets) ? p.brackets[0] : null;
+          if (b && typeof b.stopLoss === "number") stopTicks = Math.round(Math.abs(b.stopLoss) / tick);
+          if (b && typeof b.profitTarget === "number") targetTicks = Math.round(Math.abs(b.profitTarget) / tick);
+        } catch { /* params illisibles */ }
+      }
+      this.askScore({
+        symbol, action, qty, orderType, price: price ?? stopPrice ?? q?.last ?? undefined,
+        stopTicks, targetTicks, tickSize: tick,
+        accounts: ev.ok + 1, source: `Tradovate (${source.label})`, ts: Date.now(),
+      });
+    }
     return { ok: ev.failed === 0, event: ev };
   }
 
@@ -1890,6 +1954,7 @@ export class GroupEngine {
         };
       }),
       groupUnrealized: pnlKnown ? Number(groupPnl.toFixed(2)) : null,
+      journal: this.journal?.state() ?? null,
       quotes,
       marketData: { connected: !!this.md?.isAlive, symbols: this.md?.subscribedSymbols ?? [] },
       incidents: this.listIncidents(),

@@ -50,7 +50,7 @@
     box-shadow:inset 0 1px 0 rgba(255,255,255,.05), 0 4px 16px rgba(0,0,0,.35); }
   .card::before { content:''; position:absolute; inset:0; border-radius:inherit; background:var(--glass-hi); pointer-events:none; }
   .card > * { position:relative; }
-  .card-h { display:flex; align-items:center; gap:10px; font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--txt3); padding:14px 18px 10px; white-space:nowrap; min-width:0; }
+  .card-h { display:flex; align-items:center; gap:10px; font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--txt3); padding:12px 16px 8px; white-space:nowrap; min-width:0; }
   .card-h .cnt { overflow:hidden; text-overflow:ellipsis; }
   .card-h::before { content:''; display:inline-block; width:10px; height:1px; background:var(--accent2); box-shadow:0 0 8px var(--accent2); }
   .card-h .sp { flex:1; }
@@ -102,15 +102,35 @@
   .upd button { font-family:inherit; font-size:13px; font-weight:700; color:#fff; background:var(--neon); border:none; border-radius:8px; padding:9px 18px; cursor:pointer; flex:none; }
 
   /* ── grille ────────────────────────────────────────────────────────────── */
-  .grid { display:grid; grid-template-columns:400px minmax(0,1fr); gap:14px; align-items:start; margin-bottom:14px; }
-  @media (max-width: 940px) { .grid { grid-template-columns:1fr; } .ticket { position:static !important; } }
-  .col { display:flex; flex-direction:column; gap:14px; min-width:0; }
+  .grid { display:grid; grid-template-columns:400px minmax(0,1fr); gap:12px; align-items:stretch; margin-bottom:12px; }
+  @media (max-width: 940px) { .grid { grid-template-columns:1fr; } .left { position:static !important; } }
+  .col { display:flex; flex-direction:column; gap:12px; min-width:0; }
+  .col.left { position:sticky; top:70px; align-self:start; }
+  /* Le journal des ordres occupe tout l'espace restant de la colonne droite (zéro trou). */
+  .col.right { min-height:100%; }
+  .col.right .logcard { flex:1; display:flex; flex-direction:column; min-height:220px; }
+  .col.right .logcard .log { flex:1; max-height:none; min-height:140px; }
+
+  /* ── journal & avis IA ─────────────────────────────────────────────────── */
+  .ai { padding:0 16px 14px; }
+  .ai .score { display:flex; gap:14px; align-items:center; }
+  .ai .n { font-family:var(--display); font-size:42px; font-weight:700; line-height:1; letter-spacing:-.02em; flex:none; }
+  .ai .n small { font-size:14px; color:var(--txt3); font-weight:600; letter-spacing:0; }
+  .ai .n.go { color:var(--accent2); text-shadow:0 0 18px rgba(79,124,255,.55); }
+  .ai .n.caution { color:var(--amber); text-shadow:0 0 18px rgba(251,191,36,.4); }
+  .ai .n.avoid { color:var(--red); text-shadow:0 0 18px rgba(242,110,138,.45); }
+  .ai .h { font-size:14px; font-weight:600; line-height:1.4; }
+  .ai ul { margin:10px 0 0 16px; font-size:12.5px; color:var(--txt2); line-height:1.5; }
+  .ai ul li { margin-bottom:3px; }
+  .ai .meta { font-family:var(--mono); font-size:11px; color:var(--txt3); margin-top:6px; }
+  .ai .warn { display:flex; gap:7px; align-items:flex-start; color:var(--amber); font-size:12.5px; margin-top:8px; line-height:1.4; }
+  .ai .warn svg.i { flex:none; margin-top:1px; }
 
   /* ── panneau d'ordre ───────────────────────────────────────────────────── */
-  .ticket { position:sticky; top:76px; padding-bottom:14px; }
+  .ticket { padding-bottom:12px; }
   .ticket.locked .tk-body { opacity:.45; pointer-events:none; filter:saturate(.4); }
   .tk-body { padding:0 18px; }
-  .field { margin-bottom:14px; }
+  .field { margin-bottom:11px; }
   .lbl { display:flex; align-items:center; gap:8px; font-family:var(--mono); font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--txt3); margin-bottom:7px; }
   .lbl .hint { margin-left:auto; letter-spacing:0; text-transform:none; font-weight:500; color:var(--txt3); }
   .sym-wrap { position:relative; }
@@ -148,9 +168,9 @@
   .chip:hover { color:var(--txt); border-color:var(--border2); }
   .chip.sel { color:var(--accent2); border-color:rgba(79,124,255,.55); background:rgba(79,124,255,.1); }
   .qty-row { display:flex; align-items:stretch; gap:8px; }
-  .qty-row .stp { width:48px; font-size:22px; font-weight:600; color:var(--txt2); background:var(--card3); border:1px solid var(--border); border-radius:9px; transition:all .12s; }
+  .qty-row .stp { width:44px; font-size:22px; font-weight:600; color:var(--txt2); background:var(--card3); border:1px solid var(--border); border-radius:9px; transition:all .12s; }
   .qty-row .stp:hover { color:var(--txt); border-color:var(--border2); }
-  #qty { flex:1; text-align:center; font-size:26px; font-weight:700; padding:6px; -moz-appearance:textfield; }
+  #qty { flex:1; text-align:center; font-size:24px; font-weight:700; padding:4px; -moz-appearance:textfield; }
   #qty::-webkit-inner-spin-button, #qty::-webkit-outer-spin-button { -webkit-appearance:none; }
   .seg { display:flex; background:var(--card3); border:1px solid var(--border); border-radius:9px; padding:3px; gap:3px; }
   .seg button { flex:1; font-family:var(--mono); font-size:12px; font-weight:700; padding:8px 4px; border:none; border-radius:7px; background:transparent; color:var(--txt2); transition:all .12s; }
@@ -172,7 +192,7 @@
   .risk b { color:var(--txt); }
   .risk .r { color:var(--red); } .risk .g { color:var(--accent2); }
   .side { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:6px 0 10px; }
-  .big { position:relative; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; height:66px; border:none; border-radius:12px; color:#fff; font-family:var(--display); font-size:18px; font-weight:700; letter-spacing:.04em; transition:transform .1s, filter .15s, opacity .15s; }
+  .big { position:relative; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:2px; height:58px; border:none; border-radius:12px; color:#fff; font-family:var(--display); font-size:18px; font-weight:700; letter-spacing:.04em; transition:transform .1s, filter .15s, opacity .15s; }
   .big small { font-family:var(--mono); font-size:11px; font-weight:600; opacity:.85; letter-spacing:0; }
   .big.buy  { background:var(--neon); box-shadow:inset 0 1px 0 rgba(255,255,255,.22), 0 6px 22px rgba(79,124,255,.38); }
   .big.sell { background:var(--neon-red); box-shadow:inset 0 1px 0 rgba(255,255,255,.22), 0 6px 22px rgba(242,110,138,.35); }
@@ -233,7 +253,7 @@
   .ib:disabled { opacity:.3; }
   .ib.spin svg { animation:spin .8s linear infinite; }
   @keyframes spin { to { transform:rotate(360deg); } }
-  .empty { color:var(--txt3); font-family:var(--mono); font-size:12.5px; padding:16px; text-align:center; border:1px dashed var(--border); border-radius:10px; margin:0 12px 12px; }
+  .empty { color:var(--txt3); font-family:var(--mono); font-size:12px; padding:10px 14px; text-align:center; border:1px dashed var(--border); border-radius:10px; margin:0 12px 12px; line-height:1.5; }
   .masked { padding:0 12px 12px; }
   .masked .mh { display:flex; align-items:center; gap:8px; width:100%; background:none; border:none; border-top:1px solid var(--border); color:var(--txt3); font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; padding:10px 4px 6px; cursor:pointer; text-align:left; }
   .masked .mh:hover { color:var(--txt2); }
@@ -358,6 +378,7 @@
   <div id="offline" class="card" style="display:none"><div class="offline"><div class="bigt pulsing">Connexion au copieur…</div><div>Le moteur démarre et se connecte à tes comptes.</div></div></div>
 
   <main class="grid" id="main">
+    <div class="col left">
     <!-- ── PANNEAU D'ORDRE ── -->
     <section class="card ticket" id="ticket">
       <div class="card-h">Panneau d'ordre <span class="sp"></span><span class="cnt" id="tkMode">groupe</span></div>
@@ -428,7 +449,14 @@
       </div>
     </section>
 
-    <div class="col">
+    <!-- ── JOURNAL & AVIS IA ── -->
+    <section class="card" id="aiCard">
+      <div class="card-h">Avis IA <span class="sp"></span><span class="cnt" id="jrnStatus"></span><button class="btn sm" id="jrnSyncBtn" title="Demande au journal de récupérer tes trades Tradovate maintenant (sinon c'est automatique à chaque clôture)">Synchroniser</button></div>
+      <div class="ai" id="ai"></div>
+    </section>
+    </div>
+
+    <div class="col right">
       <!-- ── COMPTES ── -->
       <section class="card">
         <div class="card-h">Comptes du groupe <span class="cnt" id="acctCount"></span><span class="sp"></span><span class="cnt" id="acctSum"></span></div>
@@ -441,13 +469,14 @@
         <div class="card-h">Stops &amp; objectifs du groupe <span class="cnt" id="exitCount"></span></div>
         <div class="exits" id="exits"></div>
       </section>
+
+      <!-- ── JOURNAL DES ORDRES ── -->
+      <section class="card logcard">
+        <div class="card-h">Journal des ordres <span class="livedot off" id="livedot">live</span></div>
+        <div id="log" class="log"><div class="empty">Aucun ordre envoyé pour l'instant.</div></div>
+      </section>
     </div>
   </main>
-
-  <section class="card">
-    <div class="card-h">Journal des ordres <span class="livedot off" id="livedot">live</span></div>
-    <div id="log" class="log"><div class="empty">Aucun ordre envoyé pour l'instant.</div></div>
-  </section>
 
   <section class="card" style="margin-top:14px">
     <div class="card-h tech-h" id="tech-h" title="Diagnostic du moteur — utile pour le support"><span id="tech-caret">▸</span> Journal technique <button id="tech-copy" class="btn sm tech-copy" style="display:none">Copier</button></div>
@@ -984,6 +1013,8 @@
     }
     const off = s.accounts.filter(a => a.enabled && !a.connected);
     if (off.length && off.length === s.accounts.filter(a => a.enabled).length) out.push(`<div class="banner warn">${ico('alert')}<span>Aucun compte connecté. Ouvre tes sessions Tradovate dans le navigateur (extension active) : les tokens arrivent tout seuls.</span></div>`);
+    const jl = s.journal && s.journal.lastSync;
+    if (jl && jl.hint && !jl.error) out.push(`<div class="banner info">${ico('layers')}<span>${esc(jl.hint)}</span></div>`);
     const r = s.relay || {};
     if (r.enabled) {
       const seen = r.extensionSeenAt ? (Date.now() - r.extensionSeenAt) : null;
@@ -1021,6 +1052,7 @@
     const lots = s.accounts.filter(a => a.enabled && a.connected && a.resolved).reduce((n, a) => n + Math.floor(S.qty * a.multiplier + 1e-9), 0);
     $('acctSum').innerHTML = (s.groupUnrealized != null ? `P&amp;L latent groupe ${fmtPnl(s.groupUnrealized)} · ` : '') + `${lots} lot${lots > 1 ? 's' : ''} pour ${S.qty} de base`;
     renderLive(s);
+    renderAi(s);
     $('accounts').innerHTML = s.accounts.length ? s.accounts.map(acctRow).join('') : '<div class="empty">Aucun compte. Ouvre ta session Tradovate (extension active) puis clique « Comptes ».</div>';
     if (edit) { const el = document.querySelector(`.mult input[data-spec="${edit.spec.replace(/"/g, '\\"')}"]`); if (el) { el.value = edit.val; el.focus(); } }
     const masked = s.removedSpecs || [];
@@ -1039,6 +1071,65 @@
     if (focused) { const el = document.getElementById(focused.id); if (el) { el.value = focused.val; el.focus(); } }
     renderRecents(); updateTicket();
   }
+  // ── journal & avis IA ────────────────────────────────────────────────────────
+  let lastScoreTs = null;
+  function notify(title, body) {
+    try {
+      if (!('Notification' in window)) return;
+      if (Notification.permission === 'granted') new Notification(title, { body, silent: true });
+      else if (Notification.permission !== 'denied') Notification.requestPermission().then(p => { if (p === 'granted') new Notification(title, { body, silent: true }); });
+    } catch (_) {}
+  }
+  function renderAi(s) {
+    const j = s.journal;
+    const st = $('jrnStatus'), btn = $('jrnSyncBtn'), box = $('ai');
+    if (!j || !j.enabled) {
+      st.textContent = 'journal non relié';
+      btn.style.display = 'none';
+      box.innerHTML = '<div class="empty" style="margin:0">Colle ta clé Edge dans config.json pour relier le journal : trades clôturés ajoutés automatiquement et avis IA à chaque entrée.</div>';
+      return;
+    }
+    btn.style.display = ''; btn.disabled = !!j.syncing;
+    const ls = j.lastSync;
+    st.textContent = j.syncing ? 'synchro…' : j.pendingSync ? 'synchro imminente'
+      : ls ? (ls.error ? '⚠ synchro en échec' : `journal à jour · ${ago(ls.at)}${ls.inserted ? ` · +${ls.inserted}` : ''}`)
+      : 'journal relié';
+    st.title = ls ? (ls.error ? ls.error : `Dernière synchro il y a ${ago(ls.at)} : ${ls.inserted} trade(s) ajouté(s), ${ls.updated} mis à jour${ls.hint ? '\n' + ls.hint : ''}`) : 'Les trades clôturés sont ajoutés au journal automatiquement (8 s après la clôture).';
+    const sc = j.lastScore;
+    if (!sc) {
+      box.innerHTML = j.scoring
+        ? '<div class="empty pulsing" style="margin:0">Analyse de ton entrée en cours…</div>'
+        : '<div class="empty" style="margin:0">À chaque prise de position (panneau ou Tradovate), l’IA note l’entrée sur 100 à partir de ton historique et de ses analyses.</div>';
+      return;
+    }
+    const e = sc.entry || {};
+    const meta = `${e.action === 'Sell' ? 'VENTE' : 'ACHAT'} ${e.qty || ''} ${esc(e.symbol || '')}${e.price ? ' @ ' + e.price : ''} · ${fmtTime(sc.ts)} · ${esc(e.source || '')}${sc.ms ? ` · ${(sc.ms / 1000).toFixed(1)} s` : ''}`;
+    if (sc.error) {
+      box.innerHTML = `<div class="empty" style="margin:0;color:var(--amber)">Avis IA indisponible — ${esc(sc.error)}</div><div class="meta">${meta}</div>`;
+    } else {
+      box.innerHTML = `<div class="score"><div class="n ${esc(sc.verdict || '')}">${sc.score}<small>/100</small></div><div><div class="h">${esc(sc.headline || '')}</div><div class="meta">${meta}</div></div></div>`
+        + ((sc.reasons || []).length ? '<ul>' + sc.reasons.map(r => `<li>${esc(r)}</li>`).join('') + '</ul>' : '')
+        + (sc.warning ? `<div class="warn">${ico('alert')}<span>${esc(sc.warning)}</span></div>` : '')
+        + (j.scoring ? '<div class="meta pulsing">nouvelle analyse en cours…</div>' : '');
+    }
+    // Notification (hors bandeau) sur tout NOUVEL avis — pas sur celui déjà affiché au chargement.
+    if (lastScoreTs === null) lastScoreTs = sc.ts;
+    else if (sc.ts !== lastScoreTs) {
+      lastScoreTs = sc.ts;
+      if (!sc.error) { notify(`Avis IA ${sc.score}/100 — ${e.action === 'Sell' ? 'vente' : 'achat'} ${e.symbol || ''}`, sc.headline || ''); beep('ok'); }
+    }
+  }
+  $('jrnSyncBtn').onclick = async () => {
+    const b = $('jrnSyncBtn'); b.disabled = true;
+    try {
+      const d = await post('/api/journal/sync', {});
+      if (!d || d.error) showToast('Échec : ' + ((d && d.error) || 'erreur'));
+      else showToast(`✓ Journal synchronisé · ${d.inserted} ajouté(s) · ${d.updated} mis à jour` + (d.hint ? ` · ${d.hint}` : ''));
+    } catch (_) { showToast('Serveur injoignable'); }
+    b.disabled = false; refresh();
+  };
+  try { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); } catch (_) {}
+
   // Prix en direct de l'instrument du panneau (flux de marché Tradovate).
   let lastLast = null;
   function renderLive(s) {
@@ -1073,7 +1164,7 @@
   }
 
   // ── journal (SSE) ────────────────────────────────────────────────────────────
-  const KIND = { entry: 'ENTRÉE', bracket: 'SL/TP', exit: 'SORTIE', cancel: 'ANNUL.', flatten: 'À PLAT', modify: 'MODIF.', blocked: 'BLOQUÉ', info: 'INFO', retry: 'RELANCE' };
+  const KIND = { entry: 'ENTRÉE', bracket: 'SL/TP', exit: 'SORTIE', cancel: 'ANNUL.', flatten: 'À PLAT', modify: 'MODIF.', blocked: 'BLOQUÉ', info: 'IA', retry: 'RELANCE' };
   const fmtTime = (ts) => { const d = new Date(ts), p = n => String(n).padStart(2, '0'); return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
   function addLog(e) {
     const el = $('log'); const empty = el.querySelector('.empty'); if (empty) empty.remove();

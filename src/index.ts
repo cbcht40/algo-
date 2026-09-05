@@ -8,6 +8,7 @@ import { startBridge } from "./bridge";
 import { startDashboard } from "./dashboard";
 import { startDashboardMirror } from "./dashboardMirror";
 import { LicenseGate } from "./license";
+import { JournalLink } from "./journal";
 import { logger, setLogLevel } from "./logger";
 
 const log = logger("main");
@@ -39,6 +40,8 @@ async function main() {
   engine.setPersistPath(configPath);
   const gate = new LicenseGate();
   engine.setLicenseGate(gate);
+  // Lien avec le journal (synchro immédiate des trades clôturés + avis IA à l'entrée).
+  if (engine instanceof GroupEngine) engine.setJournal(new JournalLink({ key: cfg.license || process.env.COPIER_LICENSE }));
 
   const shutdown = async (signal: string) => {
     log.warn(`Received ${signal}, shutting down…`);

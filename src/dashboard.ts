@@ -126,6 +126,7 @@ export function startDashboard(engine: GroupEngine, port = 7879): void {
           case "/api/exits/cancel": return json(200, await engine.cancelExits(String(p.key || "")));
           case "/api/exits/breakeven": return json(200, await engine.breakevenExits(String(p.key || ""), Math.max(0, Math.floor(Number(p.offsetTicks) || 0))));
           case "/api/exits/shift": return json(200, await engine.shiftExits(String(p.key || ""), Math.round(Number(p.ticks) || 0)));
+          case "/api/journal/sync": return json(200, (await engine.journalSyncNow(true)) ?? { error: "journal non relié (clé de licence absente)" });
           case "/api/incidents/retry": return json(200, await engine.retryIncident(String(p.id || "")));
           case "/api/incidents/ignore": return json(200, engine.ignoreIncident(String(p.id || "")));
           default:
