@@ -1239,8 +1239,10 @@
     else if (sc.ts !== lastScoreTs) {
       lastScoreTs = sc.ts;
       showPill(sc);
+      // La notification système est émise par la mini-fenêtre flottante (Electron) ; dans un
+      // navigateur classique on garde la notification HTML5.
       const e = sc.entry || {};
-      if (!sc.error) { notify(`Avis IA ${sc.score} % — ${e.action === 'Sell' ? 'vente' : 'achat'} ${e.symbol || ''}`, sc.headline || ''); beep('ok'); }
+      if (!sc.error) { if (!window.electronPill) notify(`Avis IA ${sc.score} % — ${e.action === 'Sell' ? 'vente' : 'achat'} ${e.symbol || ''}`, sc.headline || ''); beep('ok'); }
     }
   }
   $('jrnSyncBtn').onclick = async () => {

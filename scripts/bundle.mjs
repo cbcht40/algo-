@@ -33,6 +33,7 @@ await build({
 copyFileSync("src/dashboard.html", "build/dashboard.html");
 copyFileSync("src/dashboard-mirror.html", "build/dashboard-mirror.html");
 copyFileSync("src/onboarding.html", "build/onboarding.html");
+copyFileSync("src/pill.html", "build/pill.html");
 // Librairie de graphique servie par le dashboard (/vendor/lightweight-charts.js), hors ligne.
 copyFileSync("node_modules/lightweight-charts/dist/lightweight-charts.standalone.production.js", "build/lightweight-charts.js");
 console.log("✓ bundled → build/copier.mjs (+ dashboard.html, dashboard-mirror.html, onboarding.html, lightweight-charts.js)");

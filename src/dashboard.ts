@@ -9,6 +9,9 @@ const log = logger("dashboard");
 
 // Read the page once at startup (zero build step — it's a single static file).
 const PAGE = readFileSync(new URL("./dashboard.html", import.meta.url), "utf8");
+// Mini-fenêtre flottante « avis IA » (Electron) — même origine que le dashboard (pas de CORS).
+let PILL = "";
+try { PILL = readFileSync(new URL("./pill.html", import.meta.url), "utf8"); } catch { /* absente en mode mirror */ }
 
 // Librairie de graphique servie en local (fonctionne hors ligne) : copiée dans build/ par
 // scripts/bundle.mjs pour l'app empaquetée, sinon lue depuis node_modules en dev.
@@ -60,6 +63,11 @@ export function startDashboard(engine: GroupEngine, port = 7879): void {
     if (req.method === "GET" && (path === "/" || path === "/index.html")) {
       res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       res.end(PAGE);
+      return;
+    }
+    if (req.method === "GET" && path === "/pill") {
+      res.writeHead(PILL ? 200 : 404, { "Content-Type": "text/html; charset=utf-8" });
+      res.end(PILL);
       return;
     }
     if (req.method === "GET" && path === "/api/state") {

@@ -1,7 +1,7 @@
 // Electron shell for the Tradovate copier. Double-click → launches the copier
 // (if it isn't already running) and shows the local dashboard as the app window.
 // No terminal, no browser. Closing the app stops the copier it started.
-const { app, BrowserWindow, shell, ipcMain } = require('electron')
+const { app, BrowserWindow, shell, ipcMain, screen, Notification } = require('electron')
 const { spawn } = require('node:child_process')
 const path = require('node:path')
 const http = require('node:http')
@@ -125,6 +125,7 @@ function startCopier() {
       startCopier()
       const ok = await waitForDashboard()
       if (win && !win.isDestroyed()) win.loadURL(ok ? DASH_URL : ERROR_HTML)
+      if (ok) createPill()
     }
   })
   copier.on('error', (err) => console.error('[electron] failed to start copier:', err))
@@ -181,6 +182,49 @@ const ERROR_HTML =
      </body>`,
   )
 
+// ── Mini-fenêtre flottante « avis IA » ───────────────────────────────────────
+// Sans cadre, transparente, toujours au premier plan, sur tous les bureaux : la pastille
+// surgit par-dessus le navigateur (Tradovate) même quand le Copieur n'est pas au premier
+// plan. La page (pill.html, servie par le moteur) pilote show/hide/resize via IPC.
+let pill = null
+const PILL_MARGIN = 18
+function placePill(w, h) {
+  if (!pill || pill.isDestroyed()) return
+  const wa = screen.getPrimaryDisplay().workArea
+  pill.setBounds({ x: Math.round(wa.x + wa.width - w - PILL_MARGIN), y: Math.round(wa.y + wa.height - h - PILL_MARGIN), width: Math.round(w), height: Math.round(h) })
+}
+function createPill() {
+  if (pill && !pill.isDestroyed()) return
+  pill = new BrowserWindow({
+    width: 360, height: 78, show: false, frame: false, transparent: true, hasShadow: false,
+    alwaysOnTop: true, skipTaskbar: true, resizable: false, minimizable: false, maximizable: false, fullscreenable: false,
+    backgroundColor: '#00000000', title: 'Avis IA',
+    webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'preload.cjs') },
+  })
+  pill.setAlwaysOnTop(true, 'floating')
+  try { pill.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }) } catch (_) { /* plateforme */ }
+  placePill(360, 78)
+  pill.loadURL(`${DASH_URL}/pill`)
+  pill.on('closed', () => { pill = null })
+}
+ipcMain.on('pill:show', (_e, focus) => {
+  if (!pill || pill.isDestroyed()) return
+  // Si le Copieur est déjà au premier plan, sa propre pastille suffit — sauf demande explicite (rapport).
+  if (!focus && win && !win.isDestroyed() && win.isFocused()) return
+  if (focus) pill.show(); else pill.showInactive()
+})
+ipcMain.on('pill:hide', () => { if (pill && !pill.isDestroyed()) pill.hide() })
+ipcMain.on('pill:resize', (_e, { w, h }) => placePill(w, h))
+ipcMain.on('pill:focus-main', () => { if (win && !win.isDestroyed()) { if (win.isMinimized()) win.restore(); win.show(); win.focus() } })
+ipcMain.on('pill:notify', (_e, { title, body }) => {
+  try {
+    if (!Notification.isSupported()) return
+    const n = new Notification({ title: String(title || 'Avis IA'), body: String(body || ''), silent: true })
+    n.on('click', () => { if (pill && !pill.isDestroyed()) { pill.show(); pill.webContents.send('pill:open') } })
+    n.show()
+  } catch (err) { console.warn('[pill] notification', err?.message || err) }
+})
+
 async function createWindow() {
   win = new BrowserWindow({
     width: 1180,
@@ -198,6 +242,7 @@ async function createWindow() {
   win.loadURL(LOADING_HTML)
   const ok = await waitForDashboard()
   win.loadURL(ok ? DASH_URL : ERROR_HTML)
+  if (ok) createPill()
 }
 
 app.whenReady().then(async () => {
@@ -228,6 +273,10 @@ app.whenReady().then(async () => {
 app.on('window-all-closed', () => {
   if (copier) copier.kill()
   if (process.platform !== 'darwin') app.quit()
+})
+// La mini-fenêtre ne compte pas comme « la » fenêtre : fermer le Copieur = tout fermer.
+app.on('browser-window-closed', (_e, w) => {
+  if (w === win) { win = null; if (pill && !pill.isDestroyed()) pill.destroy(); if (copier) copier.kill() }
 })
 
 app.on('before-quit', () => {

@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<title>Avis IA</title>
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@500;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet" />
+<style>
+  :root { --txt:#f0f0f6; --txt2:#9a9ab4; --txt3:#5e5e78; --border:rgba(255,255,255,.1); --border2:rgba(255,255,255,.18); --accent:#635bff; --accent2:#4f7cff; --red:#f26e8a; --amber:#fbbf24;
+    --mono:'Geist Mono',ui-monospace,Menlo,monospace; --display:'Space Grotesk',-apple-system,sans-serif; --sans:'Geist','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  html, body { background:transparent; height:100%; overflow:hidden; font-family:var(--sans); color:var(--txt); -webkit-font-smoothing:antialiased; }
+  body { padding:8px; }
+  .pill { display:flex; align-items:center; gap:10px; padding:7px 12px 7px 7px; border-radius:999px; background:rgba(20,20,31,.96); border:1px solid var(--border2); box-shadow:0 12px 40px rgba(0,0,0,.55), 0 0 0 1px rgba(124,116,255,.15); cursor:pointer; -webkit-app-region:no-drag; animation:pop .5s cubic-bezier(.2,1.4,.4,1); }
+  @keyframes pop { 0% { transform:translateY(24px) scale(.6); opacity:0; } 60% { transform:translateY(-4px) scale(1.06); opacity:1; } 100% { transform:none; } }
+  .pill:hover { border-color:rgba(124,116,255,.6); }
+  .ring { position:relative; width:46px; height:46px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; background:conic-gradient(var(--c) calc(var(--p) * 1%), rgba(255,255,255,.08) 0); }
+  .ring::before { content:''; position:absolute; inset:4px; border-radius:50%; background:#14141f; }
+  .ring span { position:relative; font-family:var(--display); font-weight:700; font-size:15px; color:var(--c); letter-spacing:-.02em; }
+  .ring span small { font-size:9px; font-weight:600; opacity:.8; }
+  .txt { display:flex; flex-direction:column; gap:1px; min-width:0; flex:1; }
+  .txt b { font-size:12.5px; color:var(--txt); font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .txt span { font-family:var(--mono); font-size:10.5px; color:var(--txt3); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .x { width:22px; height:22px; border-radius:50%; border:1px solid var(--border); background:rgba(28,28,42,.9); color:var(--txt3); display:flex; align-items:center; justify-content:center; padding:0; flex:none; cursor:pointer; font-size:12px; line-height:1; }
+  .x:hover { color:var(--txt); }
+  .go { --c:#4f7cff; } .caution { --c:#fbbf24; } .avoid { --c:#f26e8a; } .wait { --c:#7c74ff; } .err { --c:#9a9ab4; }
+  .wait .ring { background:conic-gradient(var(--c) 25%, rgba(255,255,255,.08) 0); animation:spin 1.2s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  /* rapport */
+  .rep { display:none; flex-direction:column; height:calc(100% - 0px); padding:18px 20px 14px; border-radius:16px; background:rgba(18,18,26,.97); border:1px solid rgba(124,116,255,.45); box-shadow:0 24px 70px rgba(0,0,0,.6); -webkit-app-region:drag; }
+  .rep.show { display:flex; }
+  .rep * { -webkit-app-region:no-drag; }
+  .rep h3 { font-family:var(--display); font-size:16px; font-weight:700; margin-bottom:10px; -webkit-app-region:drag; }
+  .rep .head { display:flex; gap:14px; align-items:center; margin-bottom:10px; }
+  .rep .ring { width:64px; height:64px; }
+  .rep .ring::before { inset:5px; background:#12121a; }
+  .rep .ring span { font-size:22px; }
+  .rep .verdict { font-family:var(--mono); font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--c); margin-bottom:3px; }
+  .rep .headline { font-size:14px; font-weight:600; line-height:1.4; }
+  .rep .meta { font-family:var(--mono); font-size:10.5px; color:var(--txt3); margin-top:5px; }
+  .rep .body { overflow:auto; flex:1; min-height:0; }
+  .rep .report { font-size:13px; line-height:1.55; padding:10px 12px; border-radius:10px; background:rgba(255,255,255,.04); border:1px solid var(--border); margin:8px 0 10px; white-space:pre-wrap; }
+  .rep ul { margin:0 0 10px 18px; font-size:12.5px; color:var(--txt2); line-height:1.5; }
+  .rep ul li { margin-bottom:3px; }
+  .rep .warn { color:var(--amber); font-size:12.5px; line-height:1.45; padding:8px 11px; border-radius:9px; background:rgba(251,191,36,.08); border:1px solid rgba(251,191,36,.35); }
+  .rep .ctx { font-family:var(--mono); font-size:10.5px; color:var(--txt3); margin-top:10px; }
+  .rep .acts { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
+  .btn { font-family:var(--mono); font-size:12px; font-weight:700; padding:8px 14px; border-radius:9px; border:1px solid var(--border); background:rgba(28,28,42,.9); color:var(--txt2); cursor:pointer; }
+  .btn:hover { color:var(--txt); border-color:var(--border2); }
+  .btn.primary { background:linear-gradient(135deg,#7c74ff,#635bff 48%,#4f7cff); color:#fff; border-color:transparent; }
+</style>
+</head>
+<body>
+  <div class="pill" id="pill" hidden></div>
+  <div class="rep" id="rep"></div>
+<script>
+  // Mini-fenêtre flottante (Electron, toujours au premier plan) : surgit par-dessus Tradovate à
+  // chaque avis IA, clic → rapport de la position. Lit l'état du moteur toutes les 2 s.
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const VERDICT = { go: 'Favorable', caution: 'Prudence', avoid: 'À éviter' };
+  const fmtTime = (ts) => { const d = new Date(ts), p = n => String(n).padStart(2, '0'); return `${p(d.getHours())}:${p(d.getMinutes())}`; };
+  const api = window.electronPill || { show() {}, hide() {}, resize() {}, focusMain() {}, notify() {}, onOpen() {} };
+  const PILL_W = 360, PILL_H = 78, REP_W = 560, REP_H = 640;
+  let last = null, lastTs = null, wasScoring = false, expanded = false, hideTimer = null;
+
+  function meta(sc) { const e = sc.entry || {}; return `${e.action === 'Sell' ? 'VENTE' : 'ACHAT'} ${e.qty || ''} ${esc(e.symbol || '')}${e.price ? ' @ ' + e.price : ''} · ${fmtTime(sc.ts)} · ${esc(e.source || '')}`; }
+  function showPill(sc, wait) {
+    const el = document.getElementById('pill');
+    document.getElementById('rep').classList.remove('show');
+    expanded = false;
+    api.resize(PILL_W, PILL_H);
+    clearTimeout(hideTimer);
+    if (wait) {
+      el.className = 'pill wait';
+      el.innerHTML = `<div class="ring" style="--p:25"><span>…</span></div><div class="txt"><b>Avis IA en cours</b><span>analyse de ton entrée</span></div>`;
+      el.hidden = false; el.onclick = null; api.show();
+      return;
+    }
+    if (!sc) { el.hidden = true; api.hide(); return; }
+    const e = sc.entry || {};
+    const v = sc.error ? 'err' : (sc.verdict || 'caution');
+    el.className = `pill ${v}`;
+    el.innerHTML = `<div class="ring" style="--p:${sc.error ? 0 : Math.max(4, sc.score)}"><span>${sc.error ? '?' : sc.score}<small>${sc.error ? '' : '%'}</small></span></div>
+      <div class="txt"><b>${esc(sc.error ? 'Avis IA indisponible' : (sc.headline || VERDICT[v] || 'Avis IA'))}</b><span>${e.action === 'Sell' ? 'vente' : 'achat'} ${e.qty || ''} ${esc(e.symbol || '')} · clique pour le rapport</span></div>
+      <button class="x" title="Masquer">✕</button>`;
+    el.hidden = false;
+    el.querySelector('.x').onclick = (ev) => { ev.stopPropagation(); hideAll(); };
+    el.onclick = () => openReport(sc);
+    api.show();
+    hideTimer = setTimeout(() => { if (!expanded) hideAll(); }, 120000);
+  }
+  function hideAll() { clearTimeout(hideTimer); document.getElementById('pill').hidden = true; document.getElementById('rep').classList.remove('show'); expanded = false; api.hide(); }
+  function openReport(sc) {
+    if (!sc) return;
+    clearTimeout(hideTimer);
+    expanded = true;
+    const e = sc.entry || {};
+    const v = sc.error ? 'caution' : (sc.verdict || 'caution');
+    const ctx = sc.context || {};
+    const rep = document.getElementById('rep');
+    rep.className = `rep show ${v}`;
+    rep.innerHTML = `<h3>Rapport de la position</h3>
+      <div class="head"><div class="ring" style="--p:${sc.error ? 0 : Math.max(4, sc.score)}"><span>${sc.error ? '?' : sc.score}<small>${sc.error ? '' : '%'}</small></span></div>
+        <div><div class="verdict">${sc.error ? 'indisponible' : (VERDICT[v] || v)}</div><div class="headline">${esc(sc.error ? 'L’avis IA n’a pas pu être calculé.' : (sc.headline || ''))}</div><div class="meta">${meta(sc)}${sc.ms ? ` · ${(sc.ms / 1000).toFixed(1)} s` : ''}</div></div></div>
+      <div class="body">
+        ${sc.error ? `<div class="report">${esc(sc.error)}</div>` : ''}
+        ${sc.report ? `<div class="report">${esc(sc.report)}</div>` : ''}
+        ${(sc.reasons || []).length ? `<ul>${sc.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}
+        ${sc.warning ? `<div class="warn">${esc(sc.warning)}</div>` : ''}
+        <div class="ctx">Basé sur ${ctx.decisions != null ? ctx.decisions + ' décision(s) de ton journal' : 'ton journal'}${ctx.todayCount != null ? ` · ${ctx.todayCount} trade(s) aujourd’hui (${(ctx.todayPnl || 0) >= 0 ? '+' : ''}${ctx.todayPnl || 0} $)` : ''}${ctx.reports ? ` · ${ctx.reports} analyse(s) IA récentes` : ''}</div>
+      </div>
+      <div class="acts"><button class="btn" id="openMain">Ouvrir le Copieur</button><button class="btn primary" id="close">Fermer</button></div>`;
+    document.getElementById('pill').hidden = true;
+    api.resize(REP_W, REP_H);
+    api.show(true);
+    rep.querySelector('#close').onclick = hideAll;
+    rep.querySelector('#openMain').onclick = () => { api.focusMain(); hideAll(); };
+  }
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideAll(); });
+  api.onOpen(() => { if (last) openReport(last); });
+
+  async function poll() {
+    let s;
+    try { s = (await (await fetch('/api/state', { cache: 'no-store' })).json()).journal; } catch (_) { return; }
+    if (!s || !s.enabled) return;
+    if (s.scoring && !wasScoring && !expanded) showPill(null, true);
+    wasScoring = !!s.scoring;
+    const sc = s.lastScore;
+    if (!sc) return;
+    if (lastTs === null) { lastTs = sc.ts; last = sc; if (Date.now() - sc.ts < 120000) showPill(sc); else if (!s.scoring) { document.getElementById('pill').hidden = true; } return; }
+    if (sc.ts !== lastTs) {
+      lastTs = sc.ts; last = sc;
+      showPill(sc);
+      const e = sc.entry || {};
+      if (!sc.error) api.notify(`Avis IA ${sc.score} % — ${e.action === 'Sell' ? 'vente' : 'achat'} ${e.symbol || ''}`, sc.headline || '');
+    }
+  }
+  poll(); setInterval(poll, 2000);
+</script>
+</body>
+</html>
