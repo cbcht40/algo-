@@ -199,10 +199,13 @@ function createPill() {
     width: 360, height: 78, show: false, frame: false, transparent: true, hasShadow: false,
     alwaysOnTop: true, skipTaskbar: true, resizable: false, minimizable: false, maximizable: false, fullscreenable: false,
     backgroundColor: '#00000000', title: 'Avis IA',
+    // macOS : seule une fenêtre « panel » flotte par-dessus les apps en PLEIN ÉCRAN (navigateur,
+    // Tradovate…) ; une fenêtre normale « toujours au premier plan » reste sous un espace plein écran.
+    ...(process.platform === 'darwin' ? { type: 'panel' } : {}),
     webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'preload.cjs') },
   })
   pill.setAlwaysOnTop(true, 'screen-saver')
-  try { pill.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }) } catch (_) { /* plateforme */ }
+  try { pill.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true, skipTransformProcessType: true }) } catch (_) { /* plateforme */ }
   placePill(360, 78)
   pill.loadURL(`${DASH_URL}/pill`)
   pill.on('closed', () => { pill = null })
@@ -217,7 +220,18 @@ ipcMain.on('pill:show', (_e, focus) => {
   // Toujours montrée (la pastille interne du dashboard est désactivée dans l'app) : pas de
   // condition sur le focus, qui rendait l'affichage aléatoire selon la fenêtre active.
   if (focus) pill.show(); else pill.showInactive()
-  console.log('[pill] show', focus ? '(focus)' : '(inactif)', 'visible=', pill.isVisible(), 'bounds=', JSON.stringify(pill.getBounds()))
+  try { pill.moveTop() } catch (_) { /* plateforme */ }
+  console.log('[pill] show', focus ? '(focus)' : '(inactif)', 'visible=', pill.isVisible(), 'onTop=', pill.isAlwaysOnTop(), 'opacity=', pill.getOpacity(), 'bounds=', JSON.stringify(pill.getBounds()), 'écrans=', screen.getAllDisplays().map(d => `${d.id}:${d.bounds.width}x${d.bounds.height}@${d.bounds.x},${d.bounds.y}${d.id === screen.getPrimaryDisplay().id ? '*' : ''}`).join(' '))
+  // Diagnostic : capture du rendu de la mini-fenêtre (ce que macOS devrait afficher).
+  setTimeout(async () => {
+    try {
+      if (!pill || pill.isDestroyed()) return
+      const img = await pill.webContents.capturePage()
+      const out = path.join(dataDir(), 'logs', 'pill-last.png')
+      fs.writeFileSync(out, img.toPNG())
+      console.log('[pill] capture', out, JSON.stringify(img.getSize()))
+    } catch (err) { console.warn('[pill] capture impossible', err?.message || err) }
+  }, 1500)
 })
 ipcMain.on('pill:hide', () => { if (pill && !pill.isDestroyed()) pill.hide() })
 ipcMain.on('pill:resize', (_e, { w, h }) => placePill(w, h))
