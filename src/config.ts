@@ -80,6 +80,10 @@ export interface Config {
   /** Relais Tradovate : un ordre passé dans le navigateur sur un compte du groupe est
    *  envoyé au même instant sur les autres (extension → pont local). Défaut true. */
   relay?: boolean;
+  /** SL/TP automatiques : "samePrice" (défaut) = le premier fill du groupe fixe la référence,
+   *  tous les comptes ont le MÊME stop et le même objectif ; "sameDistance" = chaque compte à
+   *  N ticks de SON propre fill (stops parfois décalés d'un tick entre comptes). */
+  bracketMode?: "samePrice" | "sameDistance";
   /** Mode mirror (historique) — dérivés de `accounts` s'ils sont absents. */
   master: AccountConfig;
   followers: FollowerConfig[];
@@ -199,6 +203,7 @@ export function loadConfig(path: string): Config {
     auth,
     accounts,
     relay: c.relay !== false,
+    bracketMode: c.bracketMode === "sameDistance" ? "sameDistance" : "samePrice",
     master,
     followers,
     removedSpecs: c.removedSpecs,

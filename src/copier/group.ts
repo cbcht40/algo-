@@ -370,6 +370,9 @@ export class GroupEngine {
   /** Fills reçus AVANT la réponse au placement (même trame websocket) : on les garde
    *  quelques secondes pour poser le SL/TP dès que l'orderId est connu. */
   private earlyFills = new Map<number, { client: TradovateClient; fills: Fill[]; at: number }>();
+  /** Mode « même prix » : le PREMIER fill d'un ordre de groupe fixe la référence (prix
+   *  d'entrée, stop, objectif) pour TOUS les comptes → une seule ligne de stop. */
+  private bracketRef = new Map<string, { price: number; stop?: number; target?: number; at: number }>();
   private exits = new Map<number, ExitOrder>();
   private instruments = new Map<string, Instrument>();
   private recentSymbols: string[] = [];
@@ -619,16 +622,33 @@ export class GroupEngine {
     }
     if (pb.account.client !== client) return;
     pb.filledQty += fill.qty;
-    const px = exitPrices(pb.entryAction, fill.price, pb.tickSize, pb.stopTicks, pb.targetTicks);
+    // Même prix pour tout le groupe : le premier fill fixe la référence ; les fills suivants
+    // (autres comptes, à ±1 tick) reprennent EXACTEMENT le même stop et le même objectif.
+    let px: ReturnType<typeof exitPrices>;
+    let refPrice = fill.price;
+    if (this.cfg.bracketMode !== "sameDistance") {
+      let ref = this.bracketRef.get(pb.groupId);
+      if (!ref) {
+        const first = exitPrices(pb.entryAction, fill.price, pb.tickSize, pb.stopTicks, pb.targetTicks);
+        ref = { price: fill.price, stop: first.stop, target: first.target, at: Date.now() };
+        this.bracketRef.set(pb.groupId, ref);
+      }
+      refPrice = ref.price;
+      px = { exitAction: pb.entryAction === "Buy" ? "Sell" : "Buy", stop: ref.stop, target: ref.target };
+      if (fill.price !== ref.price) log.info(`  ${pb.account.label}: fill @${fill.price} → SL/TP alignés sur la référence du groupe @${ref.price}`);
+    } else {
+      px = exitPrices(pb.entryAction, fill.price, pb.tickSize, pb.stopTicks, pb.targetTicks);
+    }
     if (px.stop === undefined && px.target === undefined) return;
     const a = pb.account;
-    const leg = await this.placeBracket(pb, fill, px);
+    const refFill: Fill = { ...fill, price: refPrice };
+    const leg = await this.placeBracket(pb, refFill, px);
     if (leg.status === "failed") {
       this.addIncident({
         kind: "bracket", account: a, symbol: pb.symbol, action: px.exitAction, qty: fill.qty, error: leg.error || "échec",
         critical: true, auto: isTransportError(leg.error),
         retry: async () => {
-          const l2 = await this.placeBracket(pb, fill, px);
+          const l2 = await this.placeBracket(pb, refFill, px);
           if (l2.status === "failed") throw new Error(l2.error || "échec");
         },
       });
@@ -813,6 +833,7 @@ export class GroupEngine {
     const now = Date.now();
     for (const [id, pb] of this.pendingBrackets) if (now - pb.createdAt > PENDING_TTL_MS) this.pendingBrackets.delete(id);
     for (const [id, e] of this.earlyFills) if (now - e.at > 15_000) this.earlyFills.delete(id);
+    for (const [id, r] of this.bracketRef) if (now - r.at > PENDING_TTL_MS) this.bracketRef.delete(id);
   }
 
   /** Après enregistrement d'un bracket en attente : rejoue les fills arrivés trop tôt. */

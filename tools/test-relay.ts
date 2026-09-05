@@ -39,8 +39,9 @@ await t("teeBody : compte + quantité changés, uuid retiré/régénéré, qty 0
 
 // --- moteur avec clients factices ----------------------------------------------------
 type Call = { spec: string; endpoint: string; body: any };
+// Les ids d'ordre Tradovate sont uniques GLOBALEMENT (pas par compte) → compteur partagé.
+let nextOrderId = 1000;
 function fakeClient(spec: string, calls: Call[], opts: { orders?: Record<number, any>; versions?: Record<number, any>; working?: any[]; positions?: any[] } = {}) {
-  let next = 1000;
   return {
     isReady: true,
     accounts: [] as any[],
@@ -48,9 +49,9 @@ function fakeClient(spec: string, calls: Call[], opts: { orders?: Record<number,
     onStatus: () => undefined,
     request: async (endpoint: string, body: any) => {
       calls.push({ spec, endpoint, body });
-      const d: any = { orderId: ++next };
-      if (endpoint === "order/placeoco") d.ocoId = ++next;
-      if (/startorderstrategy/i.test(endpoint)) d.orderStrategy = { id: ++next };
+      const d: any = { orderId: ++nextOrderId };
+      if (endpoint === "order/placeoco") d.ocoId = ++nextOrderId;
+      if (/startorderstrategy/i.test(endpoint)) d.orderStrategy = { id: ++nextOrderId };
       return { s: 200, d };
     },
     openPositions: () => opts.positions ?? [],
@@ -103,21 +104,24 @@ await t("réponse → mapping exact des modifications et annulations", async () 
     { spec: "B", mult: 1, id: 2, client: fakeClient("B", calls) },
     { spec: "C", mult: 2, id: 3, client: fakeClient("C", calls) },
   ]);
+  const before = nextOrderId;
   await e.relay({ kind: "request", teeId: "o1", endpoint: "order/placeoco", body: { accountId: 1, accountSpec: "A", action: "Sell", symbol: "MNQZ6", orderQty: 1, orderType: "Stop", stopPrice: 100, other: { action: "Sell", orderType: "Limit", price: 110 } } });
   const ids = calls.map((c) => c.spec); assert.deepEqual(ids, ["B", "C"]);
+  // ids attribués : B → stop before+1 / cible before+2, C → before+3 / before+4
+  const bStop = before + 1, bTarget = before + 2, cStop = before + 3, cTarget = before + 4;
   await e.relay({ kind: "response", teeId: "o1", status: 200, data: { orderId: 555, ocoId: 556 } });
   calls.length = 0;
-  // modif du stop source → stops copiés (ids B=1001, C=1001 de leur propre compteur)
+  // modif du stop source → stops copiés
   const m = await e.relay({ kind: "request", teeId: "m1", endpoint: "order/modifyorder", body: { orderId: 555, orderQty: 1, orderType: "Stop", stopPrice: 99 } });
   assert.equal(m.ok, true);
-  assert.deepEqual(calls.map((c) => [c.spec, c.endpoint, c.body.orderId, c.body.stopPrice, c.body.orderQty]), [["B", "order/modifyorder", 1001, 99, 1], ["C", "order/modifyorder", 1001, 99, 2]]);
+  assert.deepEqual(calls.map((c) => [c.spec, c.endpoint, c.body.orderId, c.body.stopPrice, c.body.orderQty]), [["B", "order/modifyorder", bStop, 99, 1], ["C", "order/modifyorder", cStop, 99, 2]]);
   assert.equal(events.at(-1)!.kind, "modify");
   assert.doesNotMatch(events.at(-1)!.note ?? "", /correspondance/);
   calls.length = 0;
   // annulation de la cible (ocoId) → jumeaux annulés
   const c = await e.relay({ kind: "request", teeId: "c1", endpoint: "order/cancelorder", body: { orderId: 556 } });
   assert.equal(c.ok, true);
-  assert.deepEqual(calls.map((x) => [x.spec, x.endpoint, x.body.orderId]), [["B", "order/cancelorder", 1002], ["C", "order/cancelorder", 1002]]);
+  assert.deepEqual(calls.map((x) => [x.spec, x.endpoint, x.body.orderId]), [["B", "order/cancelorder", bTarget], ["C", "order/cancelorder", cTarget]]);
 });
 
 await t("modification sans mapping → par correspondance (contrat + sens + type)", async () => {
@@ -275,6 +279,47 @@ await t("breakeven : chaque stop revient au fill de SON compte (+offset), décal
   (e as any).registerExit({ orderId: 21, account: acc[0], contractId: 42, symbol: "MNQZ6", role: "stop", action: "Buy", price: 21010, qty: 1, groupId: "g2", fillPrice: 21000 });
   await e.breakevenExits("MNQZ6|stop|Buy", 4);
   assert.deepEqual(calls.map((c) => [c.spec, c.body.stopPrice]), [["A", 20999]]);
+});
+
+// --- SL/TP au fill : même prix pour tout le groupe (défaut) vs même distance ------------
+async function fillScenario(mode: "samePrice" | "sameDistance") {
+  const calls: Call[] = [];
+  const A = fakeClient("A", calls), B = fakeClient("B", calls);
+  const { e } = engineWith([
+    { spec: "A", mult: 1, id: 1, client: A },
+    { spec: "B", mult: 1, id: 2, client: B },
+  ], { bracketMode: mode } as any);
+  const acc = (e as any).accounts;
+  const pb = (account: any, orderId: number) => ({ orderId, account, symbol: "MNQZ6", entryAction: "Buy", stopTicks: 20, targetTicks: 40, tickSize: 0.25, tif: "Day", groupId: "g1", createdAt: Date.now(), filledQty: 0 });
+  (e as any).pendingBrackets.set(101, pb(acc[0], 101));
+  (e as any).pendingBrackets.set(102, pb(acc[1], 102));
+  await (e as any).onFill(A, { id: 1, orderId: 101, contractId: 42, action: "Buy", qty: 1, price: 21000 });
+  await (e as any).onFill(B, { id: 2, orderId: 102, contractId: 42, action: "Buy", qty: 1, price: 21000.5 }); // servi 2 ticks plus haut
+  return calls.filter((c) => c.endpoint === "order/placeoco").map((c) => [c.spec, c.body.stopPrice, c.body.other.price]);
+}
+await t("SL/TP « même prix » : le premier fill fixe stop et objectif pour tous les comptes", async () => {
+  assert.deepEqual(await fillScenario("samePrice"), [["A", 20995, 21010], ["B", 20995, 21010]]);
+});
+await t("SL/TP « même distance » : chaque compte à 20/40 ticks de SON fill", async () => {
+  assert.deepEqual(await fillScenario("sameDistance"), [["A", 20995, 21010], ["B", 20995.5, 21010.5]]);
+});
+await t("breakeven en « même prix » : tous les stops reviennent à la référence du groupe", async () => {
+  const calls: Call[] = [];
+  const A = fakeClient("A", calls), B = fakeClient("B", calls);
+  const { e } = engineWith([
+    { spec: "A", mult: 1, id: 1, client: A },
+    { spec: "B", mult: 1, id: 2, client: B },
+  ]);
+  (e as any).instruments.set("MNQZ6", { symbol: "MNQZ6", contractId: 42, root: "MNQ", productName: "MNQ", tickSize: 0.25, valuePerPoint: 2, tickValue: 0.5, fetchedAt: Date.now() });
+  const acc = (e as any).accounts;
+  const pb = (account: any, orderId: number) => ({ orderId, account, symbol: "MNQZ6", entryAction: "Buy", stopTicks: 20, targetTicks: 40, tickSize: 0.25, tif: "Day", groupId: "g2", createdAt: Date.now(), filledQty: 0 });
+  (e as any).pendingBrackets.set(201, pb(acc[0], 201));
+  (e as any).pendingBrackets.set(202, pb(acc[1], 202));
+  await (e as any).onFill(A, { id: 1, orderId: 201, contractId: 42, action: "Buy", qty: 1, price: 21000 });
+  await (e as any).onFill(B, { id: 2, orderId: 202, contractId: 42, action: "Buy", qty: 1, price: 21000.75 });
+  calls.length = 0;
+  await e.breakevenExits("MNQZ6|stop|Sell", 0);
+  assert.deepEqual(calls.map((c) => [c.spec, c.body.stopPrice]), [["A", 21000], ["B", 21000]]);
 });
 
 console.log(`\n${n} tests OK`);
