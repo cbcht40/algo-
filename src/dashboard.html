@@ -5,12 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f0f13'/%3E%3Ccircle cx='16' cy='16' r='9.1' fill='none' stroke='%236c63ff' stroke-width='1.8'/%3E%3Cpath d='M16 9.4 Q16 16 22.6 16 Q16 16 16 22.6 Q16 16 9.4 16 Q16 16 16 9.4 Z' fill='%236c63ff'/%3E%3C/svg%3E" />
 <title>Let Trade Copieur — Tableau de bord</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
 <style>
   :root {
-    --bg:#0a0a10; --card:#14141d; --card2:#1a1a25; --border:#26263a;
-    --txt:#ececf4; --txt2:#9494aa; --txt3:#5a5a70;
-    --green:#34d399; --red:#fb7185; --amber:#fbbf24; --accent:#6c63ff;
-    --mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+    /* Identité « néo » partagée avec Let-Trade Journal : nuit profonde, indigo électrique + bleu
+       néon, verre dépoli, lueurs. Code couleur maison : BLEU = bon (jamais de vert), rouge, jaune. */
+    --bg:#09090c; --card:rgba(20,20,30,.62); --card2:rgba(28,28,42,.72); --border:rgba(255,255,255,.08);
+    --txt:#f0f0f6; --txt2:#9a9ab4; --txt3:#5e5e78;
+    --accent:#635bff; --accent2:#4f7cff; --accent-glow:rgba(99,91,255,.35);
+    --green:#4f7cff; --red:#f26e8a; --amber:#fbbf24;
+    --mono:'Geist Mono','JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+    --display:'Space Grotesk','Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --glass-hi:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,0) 40%);
   }
   .logo { width:28px; height:28px; vertical-align:-7px; margin-right:11px; flex:none; color:var(--accent); }
   * { box-sizing:border-box; margin:0; padding:0; }
@@ -138,6 +145,40 @@
   .logrow.ok   { border-left-color:var(--green); }
   .logrow.warn { border-left-color:var(--amber); }
   .logrow.err  { border-left-color:var(--red); }
+
+  /* ── NÉO : verre dépoli, lueurs, HUD (même identité que le journal) ─────────── */
+  body {
+    font-family:'Geist','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    background-image:
+      radial-gradient(900px 480px at 50% -10%, rgba(99,91,255,.18), transparent 60%),
+      radial-gradient(rgba(255,255,255,.035) 1px, transparent 1.2px);
+    background-size:auto, 26px 26px; background-attachment:fixed, fixed;
+  }
+  h1 { font-family:var(--display); letter-spacing:-.02em; }
+  .logo { filter:drop-shadow(0 0 10px rgba(99,91,255,.6)); }
+  .section-h { letter-spacing:.14em; }
+  .section-h::before { content:''; display:inline-block; width:10px; height:1px; background:var(--accent2); box-shadow:0 0 8px var(--accent2); }
+  .acct, .arm, .lic, .upd, .drift-banner, .logrow, .toast, .techlog {
+    -webkit-backdrop-filter:blur(14px) saturate(140%); backdrop-filter:blur(14px) saturate(140%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.05), 0 4px 16px rgba(0,0,0,.35);
+  }
+  .acct { position:relative; transition:transform .2s ease, box-shadow .25s ease, border-color .2s ease; }
+  .acct::before { content:''; position:absolute; inset:0; border-radius:inherit; background:var(--glass-hi); pointer-events:none; }
+  .acct:hover { transform:translateY(-1px); border-color:rgba(124,116,255,.35); }
+  .acct.master { border-color:rgba(124,116,255,.55); box-shadow:0 0 0 1px rgba(124,116,255,.25), 0 8px 28px rgba(99,91,255,.22), inset 0 1px 0 rgba(255,255,255,.06); }
+  .acct .dot.on { box-shadow:0 0 0 4px rgba(79,124,255,.16), 0 0 12px rgba(79,124,255,.7); }
+  .arm.on { background:linear-gradient(180deg, rgba(99,91,255,.14), rgba(79,124,255,.05)); border-color:rgba(124,116,255,.55); box-shadow:0 0 0 1px rgba(124,116,255,.25), 0 10px 32px rgba(99,91,255,.25); }
+  .arm.on .arm-dot { background:var(--accent2); box-shadow:0 0 0 5px rgba(79,124,255,.16), 0 0 14px rgba(79,124,255,.8); }
+  .arm.on .arm-title { color:var(--accent2); font-family:var(--display); }
+  .arm.off .arm-btn { background:linear-gradient(135deg,#7c74ff,#635bff 48%,#4f7cff); color:#fff; box-shadow:inset 0 1px 0 rgba(255,255,255,.22), 0 4px 18px rgba(99,91,255,.4); }
+  .upd button, button.primary { background:linear-gradient(135deg,#7c74ff,#635bff 48%,#4f7cff); box-shadow:inset 0 1px 0 rgba(255,255,255,.22), 0 4px 18px rgba(99,91,255,.36); }
+  .badge.edge, .tag-master, .mk-master { color:var(--accent2); border-color:rgba(79,124,255,.45); }
+  .poschip.long { color:var(--accent2); border-color:rgba(79,124,255,.4); background:rgba(79,124,255,.08); }
+  .livedot.on { color:var(--accent2); background:rgba(79,124,255,.12); text-shadow:0 0 8px rgba(79,124,255,.7); }
+  .logrow.ok { border-left-color:var(--accent2); }
+  ::selection { background:rgba(99,91,255,.45); color:#fff; }
+  ::-webkit-scrollbar { width:5px; } ::-webkit-scrollbar-thumb { background:rgba(124,116,255,.35); border-radius:10px; }
+  @media (prefers-reduced-motion: reduce) { .acct { transition:none; } }
   .logrow .t { color:var(--txt3); font-size:12px; flex:none; }
   .logrow .chip { font-size:10px; font-weight:700; letter-spacing:.06em; padding:2px 7px; border-radius:5px; background:var(--card2); color:var(--txt2); flex:none; }
   .logrow .chip.new    { color:var(--accent); }

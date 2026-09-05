@@ -5,12 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f0f13'/%3E%3Ccircle cx='16' cy='16' r='9.1' fill='none' stroke='%236c63ff' stroke-width='1.8'/%3E%3Cpath d='M16 9.4 Q16 16 22.6 16 Q16 16 16 22.6 Q16 16 9.4 16 Q16 16 16 9.4 Z' fill='%236c63ff'/%3E%3C/svg%3E" />
 <title>Let Trade Copieur — Configuration</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
 <style>
   :root {
-    --bg:#0a0a10; --card:#14141d; --card2:#1a1a25; --border:#26263a;
-    --txt:#ececf4; --txt2:#9494aa; --txt3:#5a5a70;
-    --green:#34d399; --red:#fb7185; --amber:#fbbf24; --accent:#6c63ff;
-    --mono:'JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+    /* Identité « néo » partagée avec Let-Trade Journal (bleu = bon, jamais de vert). */
+    --bg:#09090c; --card:rgba(20,20,30,.62); --card2:rgba(28,28,42,.72); --border:rgba(255,255,255,.08);
+    --txt:#f0f0f6; --txt2:#9a9ab4; --txt3:#5e5e78;
+    --accent:#635bff; --accent2:#4f7cff; --accent-glow:rgba(99,91,255,.35);
+    --green:#4f7cff; --red:#f26e8a; --amber:#fbbf24;
+    --mono:'Geist Mono','JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+    --display:'Space Grotesk','Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --glass-hi:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,0) 40%);
   }
   .logo { width:28px; height:28px; vertical-align:-7px; margin-right:11px; color:var(--accent); }
   * { box-sizing:border-box; margin:0; padding:0; }
@@ -46,6 +52,29 @@
   .chk { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--txt2); margin:14px 0; }
   .spin { display:inline-block; width:12px; height:12px; border:2px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:sp .8s linear infinite; vertical-align:-1px; margin-right:6px; }
   @keyframes sp { to { transform:rotate(360deg); } }
+
+  /* ── NÉO : verre dépoli, lueurs, HUD (même identité que le journal) ─────────── */
+  body {
+    font-family:'Geist','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    background-image:
+      radial-gradient(900px 480px at 50% -10%, rgba(99,91,255,.18), transparent 60%),
+      radial-gradient(rgba(255,255,255,.035) 1px, transparent 1.2px);
+    background-size:auto, 26px 26px; background-attachment:fixed, fixed;
+  }
+  h1 { font-family:var(--display); letter-spacing:-.02em; }
+  .logo { filter:drop-shadow(0 0 10px rgba(99,91,255,.6)); }
+  .step { position:relative; -webkit-backdrop-filter:blur(14px) saturate(140%); backdrop-filter:blur(14px) saturate(140%); box-shadow:inset 0 1px 0 rgba(255,255,255,.05), 0 4px 16px rgba(0,0,0,.35); }
+  .step::before { content:''; position:absolute; inset:0; border-radius:inherit; background:var(--glass-hi); pointer-events:none; }
+  .step:not(.locked) { border-color:rgba(124,116,255,.35); }
+  .step.done { box-shadow:0 0 0 1px rgba(79,124,255,.25), inset 0 1px 0 rgba(255,255,255,.06); }
+  .step .num::before { content:''; display:inline-block; width:10px; height:1px; margin-right:8px; vertical-align:middle; background:var(--accent2); box-shadow:0 0 8px var(--accent2); }
+  .step h2 { font-family:var(--display); }
+  button.primary, button.go { background:linear-gradient(135deg,#7c74ff,#635bff 48%,#4f7cff); color:#fff; box-shadow:inset 0 1px 0 rgba(255,255,255,.22), 0 4px 18px rgba(99,91,255,.36); }
+  button.primary:hover, button.go:hover { filter:brightness(1.08); }
+  input[type=text] { -webkit-backdrop-filter:blur(8px); backdrop-filter:blur(8px); }
+  input[type=text]:focus { box-shadow:0 0 0 3px rgba(99,91,255,.22); }
+  .msg.ok { color:var(--accent2); }
+  ::selection { background:rgba(99,91,255,.45); color:#fff; }
 </style>
 </head>
 <body>
@@ -70,7 +99,7 @@
       <div class="num">Étape 2 — Connecte Tradovate</div>
       <h2>Branche tes comptes</h2>
       <p>Une petite extension Chrome capte ta session Tradovate (aucun mot de passe à saisir). Installe-la en <b>un clic</b> depuis le Chrome Web Store.</p>
-      <button class="primary" onclick="openExt()">📦 Installer l'extension (1 clic)</button>
+      <button class="primary" onclick="openExt()"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-2px;margin-right:7px"><path d="M21 8 12 3 3 8l9 5 9-5z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg>Installer l'extension (1 clic)</button>
       <div class="hint" id="extHint" style="display:none; margin-top:14px">
         <div style="color:var(--green); font-weight:700; margin-bottom:8px">✓ J'ai ouvert la page <b>Chrome Web Store</b> de l'extension.</div>
         <ol style="margin:0; padding-left:22px; line-height:2.05">

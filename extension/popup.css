@@ -1,14 +1,18 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
 :root {
-  --teal: #14b8a6;
-  --green: #16a34a;
-  --red: #ef4444;
-  --amber: #f59e0b;
-  --gray: #9ca3af;
-  --bg: #0f172a;
-  --card: #1e293b;
-  --text: #e2e8f0;
-  --muted: #94a3b8;
+  /* Identité « néo » partagée avec Let-Trade Journal et le Copieur (bleu = bon, jamais de vert). */
+  --teal: #635bff;
+  --green: #4f7cff;
+  --red: #f26e8a;
+  --amber: #fbbf24;
+  --gray: #5e5e78;
+  --bg: #09090c;
+  --card: rgba(20,20,30,.72);
+  --text: #f0f0f6;
+  --muted: #9a9ab4;
+  --accent: #635bff;
+  --accent2: #4f7cff;
+  --border: rgba(255,255,255,.08);
 }
 body {
   width: 320px;
@@ -20,9 +24,11 @@ body {
 header { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .logo {
   width: 34px; height: 34px; border-radius: 9px;
-  background: linear-gradient(135deg, var(--teal), #0d9488);
-  color: #fff; font-size: 20px; font-weight: 700;
+  background: rgba(99,91,255,.14);
+  border: 1px solid rgba(124,116,255,.45);
+  color: var(--accent); font-size: 20px; font-weight: 700;
   display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 0 14px rgba(99,91,255,.45);
 }
 .title { font-size: 15px; font-weight: 700; }
 .subtitle { font-size: 11px; color: var(--muted); }
