@@ -33,6 +33,38 @@ export interface Quote {
 
 interface Sub { symbol: string; contractId?: number; active: boolean }
 
+/** Bougie (temps en secondes UTC, comme attendu par Lightweight Charts). */
+export interface Bar { time: number; open: number; high: number; low: number; close: number; volume: number }
+
+interface ChartSub {
+  key: string;
+  symbol: string;
+  tf: number; // minutes
+  count: number;
+  ids: Set<number>; // historicalId / realtimeId renvoyés par md/getChart
+  bars: Map<number, Bar>;
+  eoh: boolean;
+  active: boolean;
+}
+
+const MAX_BARS = 800;
+
+/** Barre Tradovate → Bar (null si illisible). */
+export function toBar(raw: any): Bar | null {
+  const t = Date.parse(String(raw?.timestamp || ""));
+  if (!Number.isFinite(t) || typeof raw?.open !== "number" || typeof raw?.close !== "number") return null;
+  return {
+    time: Math.floor(t / 1000),
+    open: raw.open,
+    high: typeof raw.high === "number" ? raw.high : Math.max(raw.open, raw.close),
+    low: typeof raw.low === "number" ? raw.low : Math.min(raw.open, raw.close),
+    close: raw.close,
+    volume: (Number(raw.upVolume) || 0) + (Number(raw.downVolume) || 0),
+  };
+}
+
+export const chartKey = (symbol: string, tf: number): string => `${symbol.toUpperCase()}|${tf}`;
+
 const HEARTBEAT_MS = 2_500;
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_BACKOFF_MS = 30_000;
@@ -50,6 +82,7 @@ export class MarketDataClient {
   private closing = false;
   private authorized = false;
   private subs = new Map<string, Sub>();
+  private charts = new Map<string, ChartSub>();
   private quotes = new Map<string, Quote>();
   private byContract = new Map<number, string>();
   private lastMessageAt = 0;
@@ -111,6 +144,81 @@ export class MarketDataClient {
     if (s.active && this.isAlive) this.request("md/unsubscribeQuote", { symbol: sym }).catch(() => undefined);
   }
 
+  // --- bougies (md/getChart) -------------------------------------------------------
+
+  /** Abonnement aux bougies `tf` minutes d'un symbole (historique + temps réel). Idempotent. */
+  subscribeChart(symbol: string, tf: number, count = 300): void {
+    const key = chartKey(symbol, tf);
+    let sub = this.charts.get(key);
+    if (!sub) {
+      sub = { key, symbol: symbol.toUpperCase(), tf, count, ids: new Set(), bars: new Map(), eoh: false, active: false };
+      this.charts.set(key, sub);
+    }
+    if (sub.active || !this.isAlive) return;
+    void this.sendChart(sub);
+  }
+
+  unsubscribeChart(symbol: string, tf: number): void {
+    const key = chartKey(symbol, tf);
+    const sub = this.charts.get(key);
+    if (!sub) return;
+    this.charts.delete(key);
+    if (this.isAlive) for (const id of sub.ids) this.request("md/cancelChart", { subscriptionId: id }).catch(() => undefined);
+  }
+
+  /** Bougies triées (les plus anciennes d'abord). */
+  bars(symbol: string, tf: number): Bar[] {
+    const sub = this.charts.get(chartKey(symbol, tf));
+    if (!sub) return [];
+    return [...sub.bars.values()].sort((a, b) => a.time - b.time);
+  }
+  chartInfo(symbol: string, tf: number): { active: boolean; eoh: boolean; count: number } | null {
+    const sub = this.charts.get(chartKey(symbol, tf));
+    return sub ? { active: sub.active, eoh: sub.eoh, count: sub.bars.size } : null;
+  }
+  get chartKeys(): string[] {
+    return [...this.charts.keys()];
+  }
+
+  private async sendChart(sub: ChartSub): Promise<void> {
+    if (sub.active) return;
+    sub.active = true; // évite une double demande pendant l'aller-retour
+    try {
+      const m = await this.request("md/getChart", {
+        symbol: sub.symbol,
+        chartDescription: { underlyingType: "MinuteBar", elementSize: sub.tf, elementSizeUnit: "UnderlyingUnits", withHistogram: false },
+        timeRange: { asMuchAsElements: sub.count },
+      });
+      const d = (m.d ?? {}) as Record<string, any>;
+      for (const id of [d.historicalId, d.realtimeId]) if (Number(id)) sub.ids.add(Number(id));
+      this.log.debug(`bougies ${sub.symbol} ${sub.tf}m : abonnement #${[...sub.ids].join("/")}`);
+    } catch (err) {
+      sub.active = false;
+      this.log.warn(`bougies ${sub.symbol} ${sub.tf}m refusées : ${String((err as Error)?.message || err)}`);
+    }
+  }
+
+  private applyChart(d: any): void {
+    const charts = d?.charts;
+    if (!Array.isArray(charts)) return;
+    for (const c of charts) {
+      const id = Number(c?.id);
+      const sub = [...this.charts.values()].find((s) => s.ids.has(id));
+      if (!sub) continue;
+      if (c.eoh) sub.eoh = true;
+      if (Array.isArray(c.bars)) {
+        for (const raw of c.bars) {
+          const b = toBar(raw);
+          if (b) sub.bars.set(b.time, b);
+        }
+        if (sub.bars.size > MAX_BARS) {
+          const times = [...sub.bars.keys()].sort((a, b) => a - b);
+          for (const t of times.slice(0, sub.bars.size - MAX_BARS)) sub.bars.delete(t);
+        }
+      }
+    }
+  }
+
   private async sendSubscribe(sym: string): Promise<void> {
     const s = this.subs.get(sym);
     if (!s) return;
@@ -146,7 +254,8 @@ export class MarketDataClient {
               this.backoff = 1_000;
               this.startHeartbeat();
               for (const s of this.subs.values()) { s.active = false; await this.sendSubscribe(s.symbol); }
-              this.log.info(`Flux de marché connecté (${this.env}) · ${this.subs.size} abonnement(s)`);
+              for (const c of this.charts.values()) { c.active = false; c.ids.clear(); await this.sendChart(c); }
+              this.log.info(`Flux de marché connecté (${this.env}) · ${this.subs.size} abonnement(s) · ${this.charts.size} graphique(s)`);
               if (!opened) { opened = true; resolve(); }
             })
             .catch((err) => { this.log.warn(`md : ${String(err?.message || err)}`); if (!opened) reject(err); ws.close(); });
@@ -162,6 +271,7 @@ export class MarketDataClient {
         if (this.heartbeat) clearInterval(this.heartbeat);
         this.rejectAll(new Error("md socket closed"));
         for (const s of this.subs.values()) s.active = false;
+        for (const c of this.charts.values()) { c.active = false; c.ids.clear(); }
         if (!this.closing) this.scheduleReconnect();
       });
     });
@@ -173,6 +283,7 @@ export class MarketDataClient {
       if (p) { clearTimeout(p.timer); this.pending.delete(msg.i); p.resolve(msg); }
       return;
     }
+    if (msg.e === "chart" && msg.d) { this.applyChart(msg.d); return; }
     if (msg.e !== "md" || !msg.d) return;
     const quotes = (msg.d as any).quotes;
     if (!Array.isArray(quotes)) return;

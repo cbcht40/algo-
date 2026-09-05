@@ -10,6 +10,21 @@ const log = logger("dashboard");
 // Read the page once at startup (zero build step — it's a single static file).
 const PAGE = readFileSync(new URL("./dashboard.html", import.meta.url), "utf8");
 
+// Librairie de graphique servie en local (fonctionne hors ligne) : copiée dans build/ par
+// scripts/bundle.mjs pour l'app empaquetée, sinon lue depuis node_modules en dev.
+function loadVendorChart(): string {
+  const candidates = [
+    new URL("./lightweight-charts.js", import.meta.url),
+    new URL("../node_modules/lightweight-charts/dist/lightweight-charts.standalone.production.js", import.meta.url),
+  ];
+  for (const u of candidates) {
+    try { return readFileSync(u, "utf8"); } catch { /* suivant */ }
+  }
+  log.warn("Librairie de graphique introuvable (lightweight-charts) — le graphique sera désactivé.");
+  return "";
+}
+const VENDOR_CHART = loadVendorChart();
+
 const MAX_RECENT = 200;
 
 function readJson(req: IncomingMessage): Promise<Record<string, any>> {
@@ -53,6 +68,18 @@ export function startDashboard(engine: GroupEngine, port = 7879): void {
       return void json(200, engine.dashboardState());
     }
     if (req.method === "GET" && path === "/api/logs") return void json(200, { lines: recentLogs(300) });
+    if (req.method === "GET" && path === "/vendor/lightweight-charts.js") {
+      if (!VENDOR_CHART) { res.writeHead(404); res.end(); return; }
+      res.writeHead(200, { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "public, max-age=86400" });
+      res.end(VENDOR_CHART);
+      return;
+    }
+    if (req.method === "GET" && path === "/api/chart") {
+      const symbol = url.searchParams.get("symbol") || "";
+      const tf = Number(url.searchParams.get("tf")) || 1;
+      const r = engine.chartBars(symbol, tf);
+      return void json(200, { ok: true, symbol: symbol.toUpperCase(), tf, ...r, quote: engine.quotes()[symbol.toUpperCase()] ?? null });
+    }
 
     if (req.method === "GET" && path === "/api/events") {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });

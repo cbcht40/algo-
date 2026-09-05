@@ -392,6 +392,7 @@ export class GroupEngine {
   private md?: MarketDataClient;
   private watched = new Map<string, number>(); // symbole surveillé par le panneau → dernier vu
   private mdWanted = new Map<string, number | undefined>(); // symbole → contractId
+  private chartWanted = new Map<string, { symbol: string; tf: number; at: number }>(); // graphiques demandés (TTL)
 
   constructor(cfg: Config) {
     this.cfg = cfg;
@@ -1575,7 +1576,22 @@ export class GroupEngine {
     const md = new MarketDataClient({ env: c.env as Environment, tokenProvider: () => this.anyReadyClient()?.mdToken });
     this.md = md;
     for (const [sym, cid] of this.mdWanted) md.subscribe(sym, cid);
+    for (const w of this.chartWanted.values()) md.subscribeChart(w.symbol, w.tf);
     md.start().catch((err) => log.debug(`md start : ${String((err as Error)?.message || err)}`));
+  }
+
+  /** Bougies `tf` minutes d'un symbole pour le graphique du dashboard (abonnement à la
+   *  demande, gardé 3 min après la dernière lecture). */
+  chartBars(symbol: string, tf: number): { bars: Array<{ time: number; open: number; high: number; low: number; close: number; volume: number }>; active: boolean; eoh: boolean } {
+    const sym = String(symbol || "").trim().toUpperCase();
+    const minutes = [1, 2, 3, 5, 10, 15, 30, 60].includes(tf) ? tf : 1;
+    if (!sym) return { bars: [], active: false, eoh: false };
+    const key = `${sym}|${minutes}`;
+    this.chartWanted.set(key, { symbol: sym, tf: minutes, at: Date.now() });
+    this.watch(sym);
+    this.md?.subscribeChart(sym, minutes);
+    const info = this.md?.chartInfo(sym, minutes);
+    return { bars: this.md?.bars(sym, minutes) ?? [], active: !!info?.active, eoh: !!info?.eoh };
   }
 
   /** Abonnements = instruments surveillés (TTL) + positions ouvertes + sorties en place. */
@@ -1593,6 +1609,11 @@ export class GroupEngine {
       if (!this.instruments.get(sym)) void this.resolveInstrument(sym).catch(() => undefined);
     }
     for (const sym of [...this.mdWanted.keys()]) if (!wanted.has(sym)) { this.mdWanted.delete(sym); this.md?.unsubscribe(sym); }
+    // Graphiques : on garde ceux lus récemment, on coupe les autres.
+    for (const [key, w] of [...this.chartWanted]) {
+      if (now - w.at > WATCH_TTL_MS) { this.chartWanted.delete(key); this.md?.unsubscribeChart(w.symbol, w.tf); }
+      else this.md?.subscribeChart(w.symbol, w.tf);
+    }
   }
 
   quotes(): Record<string, Quote & { tickSize?: number; valuePerPoint?: number; decimals?: number }> {

@@ -111,6 +111,18 @@
   .col.right .logcard { flex:1; display:flex; flex-direction:column; min-height:220px; }
   .col.right .logcard .log { flex:1; max-height:none; min-height:140px; }
 
+  /* ── graphique ─────────────────────────────────────────────────────────── */
+  .chart-wrap { position:relative; height:360px; margin:0 12px 12px; border-radius:10px; overflow:hidden; background:rgba(0,0,0,.2); border:1px solid var(--border); }
+  #chart { position:absolute; inset:0; }
+  .legend { position:absolute; top:8px; left:10px; z-index:2; pointer-events:none; font-family:var(--mono); font-size:11px; color:var(--txt2); display:flex; gap:10px; flex-wrap:wrap; }
+  .legend b { color:var(--txt); font-weight:600; }
+  .legend .up { color:var(--accent2); } .legend .down { color:var(--red); }
+  .chart-empty { position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-family:var(--mono); font-size:12.5px; color:var(--txt3); z-index:3; background:rgba(9,9,12,.4); }
+  .chart-empty.hidden { display:none; }
+  .tfs { margin:0; gap:4px; }
+  .tfs .chip { padding:3px 8px; font-size:10.5px; }
+  .chart-hint { position:absolute; right:10px; bottom:26px; z-index:2; font-family:var(--mono); font-size:10.5px; color:var(--txt3); pointer-events:none; }
+
   /* ── journal & avis IA ─────────────────────────────────────────────────── */
   .ai { padding:0 16px 14px; }
   .ai .score { display:flex; gap:14px; align-items:center; }
@@ -457,6 +469,16 @@
     </div>
 
     <div class="col right">
+      <!-- ── GRAPHIQUE ── -->
+      <section class="card chartcard" id="chartCard">
+        <div class="card-h">Graphique <span class="cnt" id="chartSym"></span><span class="sp"></span><span class="chips tfs" id="tfs"></span></div>
+        <div class="chart-wrap">
+          <div id="chart"></div>
+          <div class="legend" id="legend"></div>
+          <div class="chart-empty" id="chartEmpty">Choisis un instrument dans le panneau.</div>
+        </div>
+      </section>
+
       <!-- ── COMPTES ── -->
       <section class="card">
         <div class="card-h">Comptes du groupe <span class="cnt" id="acctCount"></span><span class="sp"></span><span class="cnt" id="acctSum"></span></div>
@@ -486,6 +508,7 @@
   <footer>Tableau de bord local · 127.0.0.1:7879 · mode groupe synchronisé</footer>
 </div>
 
+<script src="/vendor/lightweight-charts.js"></script>
 <script>
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -542,7 +565,7 @@
   const shortName = (s) => { s = String(s || ''); return s.length > 12 ? s.slice(0, 5) + '…' + s.slice(-4) : s; };
 
   // ── réglages du panneau (persistés localement) ─────────────────────────────
-  const DEF = { sym: '', qty: 1, type: 'Market', tif: 'Day', brk: true, stopTicks: 20, targetTicks: 40, confirm: true, recents: [], showMasked: false, sound: true };
+  const DEF = { sym: '', qty: 1, type: 'Market', tif: 'Day', brk: true, stopTicks: 20, targetTicks: 40, confirm: true, recents: [], showMasked: false, sound: true, chartTf: 1 };
   window.toggleMasked = () => { S.showMasked = !S.showMasked; saveS(); if (lastState) render(lastState); };
 
   // ── son (bip d'alerte, sans fichier : Web Audio) ─────────────────────────────
@@ -617,7 +640,7 @@
       const dec = decOf(d.tickSize);
       $('instInfo').innerHTML = `<span><b>${esc(d.productName || d.root)}</b></span><span>tick <b>${fmtPx(d.tickSize, dec)}</b> = <b>${fmtMoney(d.tickValue)}</b></span><span>point <b>${fmtMoney(d.valuePerPoint)}</b></span>`;
       $('price').step = d.tickSize;
-      renderRecents(); updateTicket();
+      renderRecents(); updateTicket(); loadChart(true);
     } catch (_) { $('instInfo').className = 'inst-info err'; $('instInfo').textContent = 'Serveur injoignable'; }
   }
   function renderRecents() {
@@ -1053,6 +1076,7 @@
     $('acctSum').innerHTML = (s.groupUnrealized != null ? `P&amp;L latent groupe ${fmtPnl(s.groupUnrealized)} · ` : '') + `${lots} lot${lots > 1 ? 's' : ''} pour ${S.qty} de base`;
     renderLive(s);
     renderAi(s);
+    updateChartLines();
     $('accounts').innerHTML = s.accounts.length ? s.accounts.map(acctRow).join('') : '<div class="empty">Aucun compte. Ouvre ta session Tradovate (extension active) puis clique « Comptes ».</div>';
     if (edit) { const el = document.querySelector(`.mult input[data-spec="${edit.spec.replace(/"/g, '\\"')}"]`); if (el) { el.value = edit.val; el.focus(); } }
     const masked = s.removedSpecs || [];
@@ -1129,6 +1153,84 @@
     b.disabled = false; refresh();
   };
   try { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); } catch (_) {}
+
+  // ── graphique (bougies Tradovate + positions/stops du groupe) ─────────────────
+  const TFS = [1, 3, 5, 15];
+  const TZ = -new Date().getTimezoneOffset() * 60; // Lightweight Charts affiche en UTC → on décale en heure locale
+  let chart = null, candles = null, chartSymNow = '', chartLastTime = 0, priceLines = [], chartBarsCache = [];
+  const fmtBarTime = (t) => { const d = new Date((t - TZ) * 1000), p = n => String(n).padStart(2, '0'); return `${p(d.getHours())}:${p(d.getMinutes())}`; };
+  function renderTfs() {
+    $('tfs').innerHTML = TFS.map(t => `<span class="chip ${t === S.chartTf ? 'sel' : ''}" data-tf="${t}">${t} min</span>`).join('');
+    $('tfs').querySelectorAll('.chip').forEach(c => c.onclick = () => { S.chartTf = Number(c.dataset.tf); saveS(); renderTfs(); loadChart(true); });
+  }
+  function ensureChart() {
+    if (chart || !window.LightweightCharts) return;
+    chart = LightweightCharts.createChart($('chart'), {
+      autoSize: true,
+      layout: { background: { type: 'solid', color: 'transparent' }, textColor: '#9a9ab4', fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: 11 },
+      grid: { vertLines: { color: 'rgba(255,255,255,.045)' }, horzLines: { color: 'rgba(255,255,255,.045)' } },
+      rightPriceScale: { borderColor: 'rgba(255,255,255,.08)' },
+      timeScale: { borderColor: 'rgba(255,255,255,.08)', timeVisible: true, secondsVisible: false, rightOffset: 4 },
+      crosshair: { mode: 0, vertLine: { color: 'rgba(124,116,255,.5)', labelBackgroundColor: '#635bff' }, horzLine: { color: 'rgba(124,116,255,.5)', labelBackgroundColor: '#635bff' } },
+    });
+    candles = chart.addCandlestickSeries({ upColor: '#4f7cff', downColor: '#f26e8a', borderUpColor: '#4f7cff', borderDownColor: '#f26e8a', wickUpColor: '#4f7cff', wickDownColor: '#f26e8a', priceLineColor: '#7c74ff' });
+    chart.subscribeCrosshairMove((p) => {
+      const b = p && p.seriesData ? p.seriesData.get(candles) : null;
+      renderLegend(b || chartBarsCache[chartBarsCache.length - 1], !!b);
+    });
+    // Clic sur le graphique en Limite/Stop → le prix cliqué remplit le panneau.
+    chart.subscribeClick((p) => {
+      if (S.type === 'Market' || !p || !p.point) return;
+      const price = candles.coordinateToPrice(p.point.y);
+      if (price != null && isFinite(price)) { fillPrice(inst ? Math.round(price / inst.tickSize) * inst.tickSize : price); showToast(`Prix ${S.type === 'Limit' ? 'limite' : 'stop'} = ${fmtPx(Number($('price').value), inst ? decOf(inst.tickSize) : 2)}`); }
+    });
+  }
+  function renderLegend(b, hover) {
+    const el = $('legend');
+    if (!b) { el.innerHTML = ''; return; }
+    const dec = inst ? decOf(inst.tickSize) : 2;
+    const up = b.close >= b.open;
+    el.innerHTML = `<span><b>${esc(chartSymNow)}</b> · ${S.chartTf} min</span><span class="${up ? 'up' : 'down'}">O <b>${fmtPx(b.open, dec)}</b> H <b>${fmtPx(b.high, dec)}</b> B <b>${fmtPx(b.low, dec)}</b> C <b>${fmtPx(b.close, dec)}</b></span><span>${fmtBarTime(b.time)}${hover ? '' : ' · en direct'}</span>`;
+  }
+  function setChartEmpty(msg) { const e = $('chartEmpty'); if (!msg) { e.classList.add('hidden'); return; } e.textContent = msg; e.classList.remove('hidden'); }
+  async function loadChart(force) {
+    const sym = ($('sym').value || '').trim().toUpperCase();
+    $('chartSym').textContent = sym ? `${sym} · ${S.chartTf} min` : '';
+    if (!sym) { chartSymNow = ''; setChartEmpty('Choisis un instrument dans le panneau.'); return; }
+    ensureChart();
+    if (!chart) { setChartEmpty('Librairie de graphique introuvable.'); return; }
+    if (sym !== chartSymNow || force) { chartSymNow = sym; chartLastTime = 0; chartBarsCache = []; candles.setData([]); }
+    let d;
+    try { d = await (await fetch(`/api/chart?symbol=${encodeURIComponent(sym)}&tf=${S.chartTf}`, { cache: 'no-store' })).json(); } catch (_) { return; }
+    if (!d || d.symbol !== chartSymNow) return;
+    const bars = (d.bars || []).map(b => ({ time: b.time + TZ, open: b.open, high: b.high, low: b.low, close: b.close }));
+    if (!bars.length) { setChartEmpty(lastState && lastState.connected ? 'En attente des bougies…' : 'Prix indisponible : aucun compte connecté.'); return; }
+    setChartEmpty('');
+    if (chartLastTime === 0) { candles.setData(bars); chart.timeScale().scrollToRealTime(); }
+    else for (const b of bars) if (b.time >= chartLastTime) candles.update(b);
+    chartLastTime = bars[bars.length - 1].time;
+    chartBarsCache = bars;
+    renderLegend(bars[bars.length - 1], false);
+    updateChartLines();
+  }
+  // Lignes de prix : entrée moyenne de chaque compte (position) + stops/objectifs du groupe.
+  function updateChartLines() {
+    if (!candles || !chartSymNow || !lastState) return;
+    for (const l of priceLines) { try { candles.removePriceLine(l); } catch (_) {} }
+    priceLines = [];
+    const add = (price, color, title, style) => { try { priceLines.push(candles.createPriceLine({ price, color, lineWidth: 1, lineStyle: style, axisLabelVisible: true, title })); } catch (_) {} };
+    const pos = new Map();
+    for (const a of lastState.accounts) for (const p of (a.positions || [])) if (p.symbol === chartSymNow && p.netPos && p.netPrice) { const k = `${p.netPos > 0 ? 'L' : 'S'}|${p.netPrice}`; pos.set(k, (pos.get(k) || 0) + 1); }
+    for (const [k, n] of pos) { const [side, px] = k.split('|'); add(Number(px), side === 'L' ? '#4f7cff' : '#f26e8a', `${side === 'L' ? 'LONG' : 'SHORT'}${n > 1 ? ' ×' + n : ''}`, 0); }
+    for (const g of (lastState.exits || [])) {
+      if (g.symbol !== chartSymNow) continue;
+      const byPx = new Map();
+      for (const a of g.accounts) byPx.set(a.price, (byPx.get(a.price) || 0) + 1);
+      for (const [px, n] of byPx) add(px, g.role === 'stop' ? '#f26e8a' : '#4f7cff', `${g.role === 'stop' ? 'STOP' : 'OBJ'}${n > 1 ? ' ×' + n : ''}`, 2);
+    }
+  }
+  renderTfs();
+  setInterval(loadChart, 2000);
 
   // Prix en direct de l'instrument du panneau (flux de marché Tradovate).
   let lastLast = null;

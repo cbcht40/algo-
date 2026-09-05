@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "electron-updater": "^6.3.9",
+    "lightweight-charts": "^4.2.3",
     "ws": "^8.18.0"
   },
   "devDependencies": {
