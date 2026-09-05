@@ -1,4 +1,5 @@
 {
+  "mode": "sync",
   "environment": "demo",
   "appId": "MacCopier",
   "appVersion": "0.1",
@@ -9,13 +10,9 @@
     "accessToken": "PASTE_YOUR_TRADOVATE_WEB_SESSION_TOKEN_HERE"
   },
 
-  "master": {
-    "label": "MASTER",
-    "accountSpec": "LFF05077107620002"
-  },
-
-  "followers": [
-    { "label": "EVAL-4", "accountSpec": "LFF05077107620004", "multiplier": 1 },
-    { "label": "EVAL-5", "accountSpec": "LFF05077107620005", "multiplier": 1 }
+  "accounts": [
+    { "label": "EVAL-1", "accountSpec": "LFF05077107620001", "multiplier": 1, "enabled": true },
+    { "label": "EVAL-2", "accountSpec": "LFF05077107620002", "multiplier": 1, "enabled": true },
+    { "label": "FUNDED-150K", "accountSpec": "PAAPEX4744710000001", "multiplier": 3, "enabled": true }
   ]
 }

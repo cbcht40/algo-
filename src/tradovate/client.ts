@@ -21,7 +21,9 @@ import type {
   Contract,
   Environment,
   Order,
+  OrderVersion,
   Position,
+  ProductInfo,
   PropsEvent,
   TokenResponse,
 } from "./types";
@@ -95,6 +97,10 @@ export class TradovateClient {
   private positions = new Map<number, Map<number, { netPos: number; netPrice?: number }>>();
   /** orderId -> latest order entity (for "flatten all" — cancel working orders) */
   private orders = new Map<number, Order>();
+  /** orderId -> latest orderVersion (qty/type/price — needed to modify an order) */
+  private versions = new Map<number, OrderVersion>();
+  /** product root (ex. "MNQ") -> product info (tickSize, valuePerPoint) */
+  private productCache = new Map<string, ProductInfo>();
 
   constructor(opts: ClientOptions) {
     this.opts = opts;
@@ -107,6 +113,7 @@ export class TradovateClient {
     // (dashboard + "flatten all").
     this.onEntity((ev) => this.trackPosition(ev));
     this.onEntity((ev) => this.trackOrder(ev));
+    this.onEntity((ev) => this.trackVersion(ev));
   }
 
   onEntity(h: EntityHandler) {
@@ -467,6 +474,65 @@ export class TradovateClient {
     return [...this.orders.values()].filter(
       (o) => o.accountId === accountId && !TERMINAL_ORDER.has(o.ordStatus),
     );
+  }
+
+  /** Latest known order entity (any status), if seen on this login. */
+  order(orderId: number): Order | undefined {
+    return this.orders.get(orderId);
+  }
+
+  private trackVersion(ev: PropsEvent): void {
+    if (ev.entityType !== "orderVersion") return;
+    const v = ev.entity as unknown as OrderVersion;
+    if (typeof v.orderId !== "number") return;
+    const prev = this.versions.get(v.orderId);
+    if (!prev || v.id >= prev.id) this.versions.set(v.orderId, v);
+  }
+
+  /** Latest orderVersion (qty / type / price) of an order seen on this login. */
+  orderVersion(orderId: number): OrderVersion | undefined {
+    return this.versions.get(orderId);
+  }
+
+  // --- instrument lookup (cached) -------------------------------------------
+
+  /** Contract suggestions for a typed prefix (ex. "MNQ" → MNQZ6, MNQH7 …). */
+  async suggestContracts(text: string, limit = 8): Promise<Contract[]> {
+    const q = `t=${encodeURIComponent(text)}&l=${limit}`;
+    const msg = await this.sendQuery("contract/suggest", q);
+    if (msg.s && msg.s >= 400) throw new Error(`contract/suggest -> status ${msg.s}`);
+    const arr = Array.isArray(msg.d) ? (msg.d as Contract[]) : [];
+    for (const c of arr) if (c?.id && c?.name) this.contractCache.set(c.id, c.name);
+    return arr;
+  }
+
+  /** Exact contract by name (ex. "MNQZ6"). undefined when unknown. */
+  async findContract(name: string): Promise<Contract | undefined> {
+    const msg = await this.sendQuery("contract/find", `name=${encodeURIComponent(name)}`);
+    if (msg.s && msg.s >= 400) return undefined;
+    const c = msg.d as Contract | undefined;
+    if (c?.id && c?.name) this.contractCache.set(c.id, c.name);
+    return c?.id ? c : undefined;
+  }
+
+  /** Product (tick size, value per point) for a root symbol (ex. "MNQ"). */
+  async findProduct(root: string): Promise<ProductInfo | undefined> {
+    const key = root.toUpperCase();
+    const cached = this.productCache.get(key);
+    if (cached) return cached;
+    const msg = await this.sendQuery("product/find", `name=${encodeURIComponent(key)}`);
+    if (msg.s && msg.s >= 400) return undefined;
+    const p = msg.d as Record<string, any> | undefined;
+    if (!p?.id || typeof p.tickSize !== "number") return undefined;
+    const info: ProductInfo = {
+      id: p.id,
+      name: String(p.name ?? key),
+      tickSize: p.tickSize,
+      valuePerPoint: typeof p.valuePerPoint === "number" ? p.valuePerPoint : 0,
+      description: p.description ? String(p.description) : undefined,
+    };
+    this.productCache.set(key, info);
+    return info;
   }
 
   // --- request/response over the socket -------------------------------------

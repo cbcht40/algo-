@@ -1,6 +1,16 @@
 import { readFileSync } from "node:fs";
 import type { Environment } from "./tradovate/types";
 
+/**
+ * Deux modes de fonctionnement :
+ *   - "sync"   (défaut) : PAS de compte maître. Le Copieur est le panneau d'ordre :
+ *                chaque ordre est envoyé à TOUS les comptes du groupe en parallèle,
+ *                au même instant (latence entre comptes ≈ quelques ms).
+ *   - "mirror" (historique) : un compte maître tradé dans Tradovate, recopié sur des
+ *                followers dès que l'ordre apparaît (latence = aller-retour serveur).
+ */
+export type CopierMode = "sync" | "mirror";
+
 export interface AuthConfig {
   /** "credentials" = username+password per login; tokens are minted & renewed
    *  automatically (set-and-forget — no API key, no token pasting). */
@@ -46,21 +56,36 @@ export interface FollowerConfig extends AccountConfig {
   enabled?: boolean;
 }
 
+/** Un compte du groupe (mode sync). Tous les comptes sont égaux : pas de maître. */
+export interface AccountEntry extends AccountConfig {
+  /** Multiplicateur de taille vs la quantité du panneau (ex. 3 pour un compte 150K
+   *  quand la quantité de base est pensée pour un 50K). Défaut 1. */
+  multiplier?: number;
+  /** Dans le groupe ? Décoché dans le dashboard => false (aucun ordre envoyé). */
+  enabled?: boolean;
+}
+
 export interface Config {
+  mode: CopierMode;
   environment: Environment;
   appId: string;
   appVersion: string;
-  /** When true, log intended follower orders but never actually send them. */
+  /** When true, log intended orders but never actually send them. */
   dryRun: boolean;
-  /** Edge license key (copy-pasted from Let-Trade Journal). Unlocks copying. */
+  /** Edge license key (copy-pasted from Let-Trade Journal). Unlocks trading. */
   license?: string;
   auth: AuthConfig;
+  /** Mode sync : le groupe de comptes (source de vérité). */
+  accounts: AccountEntry[];
+  /** Mode mirror (historique) — dérivés de `accounts` s'ils sont absents. */
   master: AccountConfig;
   followers: FollowerConfig[];
   /** Comptes supprimés manuellement depuis le dashboard → rescan ne les ré-ajoute pas. */
   removedSpecs?: string[];
-  /** Ordre d'affichage des followers dans le dashboard (specs/labels). Les followers
+  /** Ordre d'affichage des comptes dans le dashboard (specs/labels). Les comptes
    *  absents de la liste s'affichent à la fin, dans leur ordre naturel. */
+  accountOrder?: string[];
+  /** @deprecated alias historique de accountOrder (mode mirror). */
   followerOrder?: string[];
 }
 
@@ -79,16 +104,31 @@ export function loadConfig(path: string): Config {
   if (env !== "demo" && env !== "live") {
     throw new Error(`environment must be "demo" or "live" (got "${env}").`);
   }
+  const mode: CopierMode = (process.env.COPIER_MODE as CopierMode) || c.mode || "sync";
+  if (mode !== "sync" && mode !== "mirror") {
+    throw new Error(`mode must be "sync" or "mirror" (got "${String(mode)}").`);
+  }
 
   const auth = c.auth;
   if (!auth || !["token", "apikey", "credentials"].includes(auth.mode)) {
     throw new Error('config.auth.mode must be "token", "apikey" or "credentials".');
   }
+
+  // --- pool de comptes : `accounts` (nouveau) ou master+followers (ancien format) ---
+  let accounts: AccountEntry[] = Array.isArray(c.accounts) ? c.accounts.filter(Boolean) : [];
+  if (!accounts.length) {
+    // Migration automatique de l'ancien format maître/followers → tous égaux.
+    if (c.master) accounts.push({ ...c.master, multiplier: 1, enabled: true });
+    for (const f of c.followers ?? []) {
+      if (!f) continue;
+      const { symbolMap: _drop, ...rest } = f as FollowerConfig;
+      accounts.push({ ...rest });
+    }
+  }
+
   if (auth.mode === "token" && !auth.accessToken) {
     // A per-account token is still allowed, but a shared one is the common case.
-    const anyAccountHasToken =
-      c.master?.accessToken || (c.followers ?? []).some((f) => f?.accessToken);
-    if (!anyAccountHasToken) {
+    if (!accounts.some((a) => a?.accessToken)) {
       throw new Error(
         "Token mode needs auth.accessToken (paste the token from your logged-in Tradovate web session).",
       );
@@ -122,21 +162,43 @@ export function loadConfig(path: string): Config {
     return a;
   };
 
-  const master = checkAccount(c.master, "master");
-  const followers = (c.followers ?? []).map((f, i) => {
-    checkAccount(f, `followers[${i}]`);
-    return { multiplier: 1, symbolMap: {}, ...f } as FollowerConfig;
+  accounts = accounts.map((a, i) => {
+    checkAccount(a, `accounts[${i}]`);
+    const m = Number(a.multiplier ?? 1);
+    return { ...a, multiplier: Number.isFinite(m) && m >= 0 ? m : 1, enabled: a.enabled !== false };
   });
-  if (followers.length === 0) throw new Error("No followers configured.");
+  if (accounts.length === 0) throw new Error("No accounts configured.");
+
+  // Mode mirror : maître + followers dérivés du pool si l'ancien format est absent.
+  let master: AccountConfig;
+  let followers: FollowerConfig[];
+  if (c.master) {
+    master = checkAccount(c.master, "master");
+    followers = (c.followers ?? []).map((f, i) => {
+      checkAccount(f, `followers[${i}]`);
+      return { multiplier: 1, symbolMap: {}, ...f } as FollowerConfig;
+    });
+  } else {
+    master = accounts[0]!;
+    followers = accounts.slice(1).map((a) => ({ symbolMap: {}, ...a }));
+  }
+  if (mode === "mirror" && followers.length === 0) throw new Error("Mirror mode needs at least one follower.");
+
+  const dryRun = process.env.COPIER_DRYRUN === "1" ? true : (c.dryRun ?? true);
 
   return {
+    mode,
     environment: env,
     appId: c.appId ?? "MacCopier",
     appVersion: c.appVersion ?? "0.1",
-    dryRun: c.dryRun ?? true,
+    dryRun,
     license: c.license,
     auth,
+    accounts,
     master,
     followers,
+    removedSpecs: c.removedSpecs,
+    accountOrder: c.accountOrder ?? c.followerOrder,
+    followerOrder: c.followerOrder,
   };
 }

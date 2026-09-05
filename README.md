@@ -1,188 +1,129 @@
-# Tradovate Copier (Mac)
+# Let Trade Copieur
 
-Copieur de trades **quasi-instantané** pour Tradovate, par **réplication d'ordres**
-(comme Let Trade Copieur) — mais **natif Mac**, sans NinjaTrader.
+Panneau d'ordre **multi-comptes** pour Tradovate, natif Mac/Windows, sans NinjaTrader.
 
-Tu trades sur un compte **maître** ; chaque ordre est recopié en temps réel sur tes
-comptes **followers** (prop firms Eval/Funded), via l'**API Tradovate** (WebSocket
-persistant → latence minimale).
+**Plus de compte maître ni de followers.** Tu passes ton ordre dans le Copieur ; il part sur
+**tous les comptes du groupe en même temps** (les trames sont envoyées dos à dos sur des
+websockets déjà ouverts → écart entre comptes de l'ordre de la milliseconde, affiché à chaque
+ordre). Les stops et objectifs sont posés **au fill de chaque compte, à son propre prix**, puis
+se déplacent **pour tout le groupe en un clic**.
 
-> ⚠️ Outil de trading qui envoie de vrais ordres. Commence **toujours** en `demo`
-> + `dryRun: true`. Tu es responsable du respect des règles de ta/tes prop firm(s).
+> ⚠️ Outil de trading qui envoie de vrais ordres. Commence **toujours** en `demo` +
+> `dryRun: true`. Tu es responsable du respect des règles de ta/tes prop firm(s).
 
 ---
 
-## 0. Mode autonome (recommandé) — calibre une fois, tourne tout seul
+## 0. Démarrage (app)
 
-```bash
-npm run setup              # 1 token par firme, choix du maître, demo/live auto
-npm run service:install    # service 24/7 : démarre au boot, relance auto
-```
+1. Installe l'app (`.dmg` Mac / `.exe` Windows, releases GitHub `let-trade-copieur`).
+2. Au premier lancement, l'assistant demande ta clé **Edge** (let-tradejournal.com/copieur),
+   ouvre le Chrome Web Store pour installer l'**extension Let Trade Copieur** (elle capte ta
+   session Tradovate — aucun mot de passe à saisir), découvre tes comptes, et te laisse
+   **cocher ceux qui tradent ensemble**.
+3. Le tableau de bord s'ouvre : panneau d'ordre à gauche, comptes à droite.
 
-Puis, pour ne **plus jamais coller de token**, installe l'**extension Let Trade Copieur**
-(dossier `extension/`, voir `extension/README.md`) : tant que tes onglets
-Tradovate sont ouverts, elle capte et transmet les tokens au copieur toute seule.
+> Comptes prop firm (Eval/Funded) : pas d'« API Access » Tradovate, donc pas de login par mot
+> de passe. On réutilise le **token de ta session web**, poussé en continu par l'extension.
 
-- **Service macOS (launchd)** : démarre à l'allumage du Mac, se relance en cas
-  de crash, logue dans `logs/copier.log` (`npm run service:logs`).
-- **Renouvellement & cache** : tant que le copieur tourne il renouvelle ses
-  tokens; le cache disque (`.tradovate-tokens.json`, gitignored) permet de
-  reprendre après un redémarrage.
-- **Extension Let Trade Copieur** : pont local `127.0.0.1:7878` + lecture du token de ta
-  propre session → autonomie réelle, même après une longue coupure.
+## 1. Le tableau de bord
 
-> Note : les comptes prop firm (Eval/Funded) n'ont pas l'« API Access » de
-> Tradovate, donc **pas de login par mot de passe** : on réutilise le token de
-> session (collé une fois, ou fourni en continu par l'extension).
+**Panneau d'ordre** (à gauche, toujours visible)
+- **Instrument** : tape `MNQ`, choisis le contrat (suggestions Tradovate). Le tick et sa
+  valeur en $ s'affichent ; les derniers instruments utilisés sont en raccourci.
+- **Quantité de base** : stepper + presets. Chaque compte reçoit `base × son multiplicateur`
+  (arrondi à l'unité inférieure — `×0,5` d'un lot n'envoie **rien**).
+- **Type** : Marché / Limite / Stop, TIF Day ou GTC.
+- **Stop & objectif automatiques** (en ticks) : posés au fill de chaque compte, à son prix.
+  Le risque en $ pour le groupe est calculé en direct (et le R:R).
+- **ACHETER / VENDRE** : un clic (confirmation optionnelle) → tous les comptes cochés et
+  connectés. Le résultat indique `envoyés / total · latence · écart entre comptes`.
+- **Annuler les ordres** : tous les ordres en attente, tous les comptes.
 
-## 1. Deux modes de connexion
+**Barre du haut**
+- `n/N connectés`, **Comptes** (détecte les nouveaux comptes), **Verrouiller** (aucune entrée
+  ne part, sorties toujours possibles), **Tout à plat** (annule tout + clôture au marché).
 
-Tradovate exige un compte **LIVE + >5000 $ + abonnement API Access** pour générer une
-**clé API**. Tes comptes prop firm **Eval n'y ont donc pas droit**. Mais on n'en a pas
-besoin :
+**Comptes du groupe** : interrupteur (dans le groupe ou non), état de session, positions,
+protections en place, **× multiplicateur**, quantité résultante, et par compte : mettre à plat,
+annuler ses ordres, actualiser, retirer. Glisser pour réordonner.
 
-| Mode | Pour qui | Comment |
-|---|---|---|
-| **`token`** (recommandé pour prop firm) | Comptes **Eval/Funded** | On réutilise le **token de ta session web** déjà connectée. Aucune clé API. |
-| **`apikey`** | Compte **LIVE** avec API Access | Authentification classique `cid`/`sec`. |
+**Stops & objectifs du groupe** : une ligne par (instrument, stop/objectif). Nouveau prix +
+**Appliquer à tous** → `order/modifyorder` sur chaque compte en parallèle. Boutons ±1/±4 ticks.
 
-**Pourquoi le mode token marche :** `cid`/`sec` ne servent qu'à *fabriquer* un token.
-Une fois connecté sur `trader.tradovate.com`, ton navigateur **a déjà** un token
-valide (c'est lui qui passe tes ordres). Le renouvellement et **tous** les appels
-d'ordres n'ont besoin **que du token**. On réutilise donc celui de ta session.
+**Journal des ordres** : chaque action de groupe avec le détail par compte (clic sur la ligne).
 
-## 2. Récupérer ton token de session (mode token)
+## 2. Sécurités
 
-1. Connecte-toi sur **https://trader.tradovate.com** (laisse l'onglet ouvert).
-2. Ouvre les **outils développeur** :
-   - Chrome : `Cmd+Option+I`
-   - Safari : Réglages → Avancé → « Afficher les fonctionnalités… développeur », puis `Cmd+Option+I`
-3. Onglet **Network / Réseau**. Filtre sur `tradovateapi`.
-4. Clique sur une requête vers `*.tradovateapi.com` → **Headers** → cherche
-   `Authorization: Bearer XXXXX`. **Copie la partie après `Bearer `** : c'est ton token.
-5. Note aussi l'**hôte** appelé (ex. `demo.tradovateapi.com`). S'il diffère de
-   demo/live, renseigne `auth.restBase` / `auth.wsUrl` (voir §4).
+- **Contrôle de synchronisation** (toutes les 3 s) : position ÷ multiplicateur doit être
+  identique sur tous les comptes cochés. Un écart persistant > 6 s est signalé (bandeau + ligne
+  rouge) — jamais corrigé automatiquement.
+- **Garde anti-orphelins** : un compte revenu à plat sur un contrat (sortie manuelle dans
+  Tradovate…) voit ses stops/objectifs posés par le Copieur annulés, pour ne pas rouvrir une
+  position inverse.
+- **Verrou** du panneau, **confirmation** avant envoi (activée par défaut), **simulation**
+  (`dryRun`) qui journalise sans rien envoyer.
+- Licence **Edge** requise pour les entrées ; annulations et mise à plat restent possibles
+  même hors licence (72 h de grâce si le backend est injoignable).
 
-> Le token a une durée de vie limitée. Tant que le copieur tourne, il le **renouvelle
-> tout seul** (garde ta session web connectée). S'il a totalement expiré, recolle un
-> token frais et relance.
-
-## 3. Installation
+## 3. Installation (développeur)
 
 ```bash
 npm install
-cp config.example.json config.json
+cp config.example.json config.json   # gitignored
+npm start                            # moteur + dashboard http://127.0.0.1:7879
+npm run app                          # la même chose dans la fenêtre Electron
+npx tsx tools/test-group.ts          # tests des briques pures
 ```
 
-`config.json` est **gitignored** : tes identifiants ne seront jamais committés.
+Variables utiles : `COPIER_DRYRUN=1` (force la simulation), `COPIER_MODE=mirror` (ancien mode
+maître/followers, voir §5), `DASHBOARD_PORT`, `BRIDGE_PORT`, `LOG_LEVEL=debug`,
+`COPIER_LICENSE_BYPASS=1` (dev).
 
 ## 4. Configuration (`config.json`)
 
-**Mode token** (prop firm Eval — tous tes comptes sont en général sous **un seul
-login**, donc **un seul token** couvre maître + followers) :
-
 ```jsonc
 {
+  "mode": "sync",             // défaut
   "environment": "demo",      // Eval = "demo" chez Tradovate
-  "appId": "MacCopier",
-  "appVersion": "0.1",
   "dryRun": true,             // true = log seulement, AUCUN ordre envoyé
-
-  "auth": {
-    "mode": "token",
-    "accessToken": "colle_ton_token_ici",
-    "restBase": "https://demo.tradovateapi.com/v1",   // optionnel (si hôte différent)
-    "wsUrl": "wss://demo.tradovateapi.com/v1/websocket" // optionnel
-  },
-
-  "master":   { "label": "MASTER", "accountSpec": "LFF05077107620002" },
-  "followers": [
-    { "label": "EVAL-4", "accountSpec": "LFF05077107620004", "multiplier": 1 },
-    { "label": "EVAL-5", "accountSpec": "LFF05077107620005", "multiplier": 1, "symbolMap": { "MESU6": "ESU6" } }
+  "license": "ltj_…",
+  "auth": { "mode": "credentials" },
+  "accounts": [
+    { "label": "EVAL-1",      "accountSpec": "LFF05077107620001", "multiplier": 1, "enabled": true,  "accessToken": "…" },
+    { "label": "FUNDED-150K", "accountSpec": "PAAPEX4744710000001", "multiplier": 3, "enabled": true,  "accessToken": "…", "environment": "live" }
   ]
 }
 ```
 
-- `accountSpec` = le nom exact du compte (ex. `LFF05077107620002`), ou `accountId` (nombre).
-- `multiplier` : `2` double la taille, `0.5` la divise (arrondi).
-- Si certains comptes sont sous **un autre login**, ajoute un `accessToken` propre à
-  l'objet compte concerné.
+- `accountSpec` = nom exact du compte ; `accountId` accepté à la place.
+- `multiplier` : taille relative à la quantité de base ; `enabled` : dans le groupe ou non.
+- Un `environment` par compte permet de mélanger demo (Eval) et live (Funded).
+- Une ancienne config `master` + `followers` est **migrée automatiquement** au chargement
+  (tous égaux, multiplicateur conservé).
 
-**Mode apikey** (compte LIVE avec API Access) : mets `auth.mode = "apikey"` et donne à
-chaque compte `name`, `password`, `cid`, `sec` (au lieu du token global).
+## 5. Ancien mode « miroir » (maître → followers)
 
-## 5. Lancement
+Toujours disponible : `"mode": "mirror"` (ou `COPIER_MODE=mirror`). Un compte maître tradé
+dans Tradovate est recopié sur les followers dès que l'ordre apparaît côté serveur (latence =
+aller-retour Tradovate, ~100–400 ms). Le tableau de bord historique est servi dans ce mode.
 
-```bash
-npm start                 # utilise ./config.json
-npm start ma-config.json  # ou un chemin précis
-LOG_LEVEL=debug npm start # logs détaillés
-```
-
-Workflow conseillé :
-
-1. `dryRun: true` → passe un ordre sur le maître, vérifie les lignes `[DRY] FOLLOWER…`.
-2. `dryRun: false` sur tes comptes **Eval** (sans risque réel) → vérifie la copie réelle.
-3. Live réel : `multiplier` petit et **1 contrat** d'abord.
-
-Arrêt : `Ctrl+C` (ferme les connexions ; ne touche pas à tes positions).
-
-## 6. Comment ça marche
-
-```
-  Compte MAÎTRE ──(WebSocket, temps réel)──► CopierEngine ──(WebSocket)──► Followers
-  tu passes un ordre        events                réplique           order/placeorder
-```
-
-- WebSocket **persistant pré-authentifié** par login (heartbeat 2,5 s, reconnexion
-  auto avec backoff, renouvellement du token).
-- `user/syncrequest` récupère l'état complet, puis les **événements** (ordres / fills /
-  positions) arrivent en push.
-- Quand un ordre devient `Working` sur le maître (ou un `Market` exécuté), il est
-  recopié **en parallèle** sur tous les followers : `action`, `orderType`, prix,
-  `orderQty × multiplier`, instrument (avec remap éventuel).
-- **Annulations** et **modifications** du maître sont propagées aux followers.
-
-## 7. Sécurité & limites (lire avant le réel)
-
-- **Démarre à plat** : les ordres/positions déjà ouverts au lancement **ne sont pas**
-  répliqués (seuls les ordres passés *après* le démarrage le sont). Avertissement si le
-  maître n'est pas à plat.
-- **Brackets/OCO (SL+TP)** : chaque ordre est copié individuellement ; l'annulation
-  d'une jambe OCO du maître est propagée, mais il existe une petite fenêtre où les
-  jambes follower ne sont pas liées en OCO. Reconstruction OCO native prévue (§8).
-- **Partiels / rejets** : un rejet follower (ex. limite de risque prop firm) est
-  **loggé** sans bloquer les autres followers.
-- **Règles prop firm & ToS** : le mode token réutilise **ta propre** session — c'est
-  *tes* comptes. Copier entre tes propres comptes est généralement permis ; l'auto
-  « set & forget » est parfois encadré. Reste conforme à tes conditions.
-
-## 8. Feuille de route
-
-- [ ] Reconstruction **bracket/OCO native** sur les followers (SL/TP liés).
-- [ ] **Garde-fous prop firm** : perte journalière max/compte (auto-flatten), position
-      max, **kill-switch** global.
-- [ ] Filet de sécurité par **réconciliation de position**.
-- [ ] **Extension navigateur** (lit le token de session automatiquement, zéro copier-coller).
-- [ ] Petite **interface** (dashboard) pour piloter et voir l'état en direct.
-
-## Structure
+## 6. Structure
 
 ```
 src/
-  index.ts              # point d'entrée CLI
-  config.ts             # chargement + validation (modes token / apikey)
-  logger.ts             # logs horodatés par compte
-  tradovate/
-    auth.ts             # token (REST) : acquire (apikey) + renew (token) + penalty
-    ws.ts               # protocole de trames WebSocket (o/h/a/c, requêtes)
-    client.ts           # connexion auto-réparante : auth, heartbeat, requêtes, events
-    types.ts            # modèles d'entités (order, orderVersion, fill, position…)
-  copier/
-    masterBook.ts       # état local du carnet d'ordres du maître
-    engine.ts           # moteur de réplication (placements, annulations, modifs)
+  index.ts              # point d'entrée : sync (GroupEngine) ou mirror (CopierEngine)
+  config.ts             # chargement + validation + migration master/followers → accounts
+  copier/group.ts       # MODE SYNC : ordre de groupe, SL/TP au fill, garde, synchro
+  copier/engine.ts      # mode mirror (historique)
+  dashboard.ts/.html    # tableau de bord sync (API + page)
+  dashboardMirror.ts / dashboard-mirror.html   # tableau de bord mirror
+  setup.ts / onboarding.html                   # assistant premier lancement
+  bridge.ts             # pont 127.0.0.1:7878 pour l'extension (tokens)
+  tradovate/            # auth, websocket, client auto-réparant, types
+electron/               # fenêtre + auto-update
+extension/              # extension Chrome (capte le token de session)
+tools/test-group.ts     # tests des briques pures
 ```
 
-> Note : exécuté depuis un environnement cloud, l'accès réseau sortant vers
-> `tradovateapi.com` peut être bloqué (« host not in allowlist »). En local sur Mac,
-> aucun souci.
+> Exécuté depuis un environnement cloud, l'accès sortant vers `tradovateapi.com` peut être
+> bloqué. En local sur Mac/PC, aucun souci.

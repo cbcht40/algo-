@@ -3,8 +3,10 @@ import { resolve } from "node:path";
 import { loadConfig } from "./config";
 import { startSetup } from "./setup";
 import { CopierEngine } from "./copier/engine";
+import { GroupEngine } from "./copier/group";
 import { startBridge } from "./bridge";
 import { startDashboard } from "./dashboard";
+import { startDashboardMirror } from "./dashboardMirror";
 import { LicenseGate } from "./license";
 import { logger, setLogLevel } from "./logger";
 
@@ -24,13 +26,16 @@ async function main() {
   }
 
   const cfg = loadConfig(configPath);
-  log.info(`Loaded config from ${configPath}`);
+  log.info(`Loaded config from ${configPath} (mode ${cfg.mode})`);
 
   if (cfg.environment === "live" && !cfg.dryRun) {
     log.warn("⚠️  LIVE environment with dryRun=false — real orders will be sent.");
   }
 
-  const engine = new CopierEngine(cfg);
+  // Deux moteurs :
+  //   sync   → GroupEngine : panneau d'ordre unique, tous les comptes en parallèle (défaut)
+  //   mirror → CopierEngine : maître recopié sur des followers (historique)
+  const engine = cfg.mode === "mirror" ? new CopierEngine(cfg) : new GroupEngine(cfg);
   engine.setPersistPath(configPath);
   const gate = new LicenseGate();
   engine.setLicenseGate(gate);
@@ -57,14 +62,16 @@ async function main() {
   // Local web dashboard (own port, separate from the extension bridge).
   if (process.env.DASHBOARD !== "off") {
     try {
-      startDashboard(engine, Number(process.env.DASHBOARD_PORT) || 7879);
+      const port = Number(process.env.DASHBOARD_PORT) || 7879;
+      if (engine instanceof GroupEngine) startDashboard(engine, port);
+      else startDashboardMirror(engine, port);
     } catch (err) {
       log.warn(`Could not start dashboard: ${String(err)}`);
     }
   }
 
   // Verify the Edge entitlement before going live (and re-check periodically).
-  // Copying stays locked until a valid Edge license is confirmed; the dashboard
+  // Trading stays locked until a valid Edge license is confirmed; the dashboard
   // and account/position views still work.
   await gate.start(cfg.license || process.env.COPIER_LICENSE);
 

@@ -111,12 +111,13 @@
       <div class="accts" id="accts"></div>
     </div>
 
-    <!-- 3. Pick master + start -->
+    <!-- 3. Pick the group + start -->
     <div class="step locked" id="s3">
-      <div class="num">Étape 3 — Choisis ton maître</div>
-      <h2>Quel compte pilote les autres ?</h2>
-      <p>Sélectionne le compte sur lequel tu <b>trades</b> — les autres le copieront.</p>
-      <div class="accts" id="masterPick"></div>
+      <div class="num">Étape 3 — Ton groupe</div>
+      <h2>Quels comptes tradent ensemble ?</h2>
+      <p>Plus de compte maître : chaque ordre passé dans le Copieur part sur <b>tous les comptes cochés en même temps</b>. Tu pourras cocher/décocher et régler la taille de chacun plus tard.</p>
+      <div class="row" style="margin-bottom:6px"><button class="primary" style="padding:6px 12px;font-size:11px" onclick="pickAll(true)">Tout cocher</button><button style="padding:6px 12px;font-size:11px;background:var(--card2);color:var(--txt2)" onclick="pickAll(false)">Tout décocher</button></div>
+      <div class="accts" id="groupPick"></div>
       <label class="chk"><input type="checkbox" id="dry" /> Démarrer en <b>simulation</b> (aucun ordre réel envoyé)</label>
       <button class="go" id="saveBtn" onclick="save()" disabled>Démarrer le copieur →</button>
       <div class="msg" id="s3msg"></div>
@@ -126,7 +127,7 @@
 <script>
   const $ = (id) => document.getElementById(id);
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-  let unlocked = false, accounts = [], master = null;
+  let unlocked = false, accounts = [], selected = new Set();
 
   async function checkKey() {
     const key = $('key').value.trim();
@@ -158,17 +159,26 @@
     $('s2msg').className = 'msg ok'; $('s2msg').textContent = '✓ ' + accounts.length + ' compte(s) détecté(s)';
     $('accts').innerHTML = accounts.map(a => `<div class="acct"><span class="nm">${esc(a.name)}</span><span class="env">${esc(a.env)}</span></div>`).join('');
     $('s3').classList.remove('locked');
-    $('masterPick').innerHTML = accounts.map((a,i) => `
-      <label class="acct"><input type="radio" name="master" value="${esc(a.name)}" onchange="pickMaster('${esc(a.name)}')">
-        <span class="nm">${esc(a.name)}</span><span class="env">${esc(a.env)}</span></label>`).join('');
+    // Tout le monde dans le groupe par défaut (les nouveaux comptes découverts aussi).
+    accounts.forEach(a => selected.add(a.name));
+    renderGroup();
   }
-  function pickMaster(spec) { master = spec; $('saveBtn').disabled = !master; }
+  function renderGroup() {
+    $('groupPick').innerHTML = accounts.map(a => `
+      <label class="acct"><input type="checkbox" value="${esc(a.name)}" ${selected.has(a.name) ? 'checked' : ''} onchange="togglePick('${esc(a.name)}', this.checked)">
+        <span class="nm">${esc(a.name)}</span><span class="env">${esc(a.env)}</span></label>`).join('');
+    $('saveBtn').disabled = selected.size === 0;
+    $('saveBtn').textContent = selected.size ? `Démarrer avec ${selected.size} compte${selected.size > 1 ? 's' : ''} →` : 'Coche au moins un compte';
+  }
+  function togglePick(name, on) { if (on) selected.add(name); else selected.delete(name); renderGroup(); }
+  function pickAll(on) { selected = new Set(on ? accounts.map(a => a.name) : []); renderGroup(); }
+  window.togglePick = togglePick; window.pickAll = pickAll;
 
   async function save() {
-    if (!master) return;
+    if (!selected.size) return;
     $('saveBtn').disabled = true; $('s3msg').className = 'msg wait'; $('s3msg').innerHTML = '<span class="spin"></span>Écriture de la config + démarrage du copieur…';
     try {
-      const r = await fetch('/api/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ masterSpec: master, dryRun: $('dry').checked }) });
+      const r = await fetch('/api/save', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ accounts: [...selected], dryRun: $('dry').checked }) });
       const d = await r.json();
       if (d.ok) { $('s3msg').className = 'msg ok'; $('s3msg').innerHTML = '<span class="spin"></span>C\'est parti — le copieur démarre, la fenêtre va se recharger automatiquement…'; waitForCopier(); }
       else { $('s3msg').className = 'msg err'; $('s3msg').textContent = '✗ ' + (d.error || 'erreur'); $('saveBtn').disabled = false; }

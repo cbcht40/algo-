@@ -126,28 +126,30 @@ export function startSetup(opts: SetupOptions): void {
     accounts: [...logins.values()].flatMap((l) => l.accounts.map((name) => ({ name, env: l.env }))),
   });
 
-  function buildConfig(masterSpec: string, dryRun: boolean) {
+  // Mode SYNC : tous les comptes découverts entrent dans la config ; ceux cochés par
+  // l'utilisateur sont « dans le groupe » (enabled), les autres restent visibles mais exclus.
+  function buildConfig(selected: string[], dryRun: boolean) {
     const all = [...logins.values()].flatMap((l) => l.accounts.map((name) => ({ name, login: l })));
-    const master = all.find((a) => a.name === masterSpec) ?? all[0];
-    if (!master) throw new Error("aucun compte à configurer");
-    const followers = all
-      .filter((a) => a !== master)
-      .map((a) => ({
-        label: a.name,
-        accountSpec: a.name,
-        multiplier: 1,
-        accessToken: a.login.token,
-        ...(a.login.env !== master.login.env ? { environment: a.login.env } : {}),
-      }));
+    if (!all.length) throw new Error("aucun compte à configurer");
+    const chosen = new Set(selected.length ? selected : all.map((a) => a.name));
+    const environment = all.find((a) => chosen.has(a.name))?.login.env ?? all[0]!.login.env;
+    const accounts = all.map((a) => ({
+      label: a.name,
+      accountSpec: a.name,
+      multiplier: 1,
+      enabled: chosen.has(a.name),
+      accessToken: a.login.token,
+      ...(a.login.env !== environment ? { environment: a.login.env } : {}),
+    }));
     return {
-      environment: master.login.env,
+      mode: "sync",
+      environment,
       appId: "MacCopier",
       appVersion: "0.1",
       dryRun,
       license: license.key,
       auth: { mode: "credentials" },
-      master: { label: master.name, accountSpec: master.name, accessToken: master.login.token },
-      followers,
+      accounts,
     };
   }
 
@@ -198,12 +200,15 @@ export function startSetup(opts: SetupOptions): void {
       req.on("data", (c) => (body += c));
       req.on("end", () => {
         try {
-          const { masterSpec, dryRun } = JSON.parse(body || "{}");
+          const { accounts: picked, masterSpec, dryRun } = JSON.parse(body || "{}");
           if (!license.unlocked) return void json(403, { ok: false, error: "licence Edge requise" });
           if (!logins.size) return void json(400, { ok: false, error: "aucun compte connecté" });
-          const config = buildConfig(String(masterSpec || ""), !!dryRun);
+          // `accounts` = cases cochées (mode sync) ; `masterSpec` = ancien assistant (tolérance).
+          const selected: string[] = Array.isArray(picked) ? picked.map(String) : masterSpec ? [String(masterSpec)] : [];
+          const config = buildConfig(selected, !!dryRun);
           writeFileSync(configPath, JSON.stringify(config, null, 2));
-          log.info(`Config écrite → ${configPath} (maître ${config.master.label}, ${config.followers.length} follower(s)). Redémarrage…`);
+          const inGroup = config.accounts.filter((a) => a.enabled).length;
+          log.info(`Config écrite → ${configPath} (${inGroup}/${config.accounts.length} compte(s) dans le groupe). Redémarrage…`);
           json(200, { ok: true });
           // Exit so the Electron app (watching config.json) restarts into copier mode.
           setTimeout(() => process.exit(0), 400);

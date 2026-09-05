@@ -5,11 +5,16 @@
 //   GET  /status                         -> { running, logins: [...] }
 import { createServer } from "node:http";
 import { logger } from "./logger";
-import type { CopierEngine } from "./copier/engine";
 
 const log = logger("bridge");
 
-export function startBridge(engine: CopierEngine, port = 7878): void {
+/** Ce que le pont attend d'un moteur (mirror ou sync) : router un token, dire qui est prêt. */
+export interface TokenSink {
+  ingestToken(token: string): Promise<{ ok: boolean; login?: string; acted?: boolean; error?: string }>;
+  status(): Array<{ label: string; userId: number; ready: boolean; sub?: string }>;
+}
+
+export function startBridge(engine: TokenSink, port = 7878): void {
   const server = createServer((req, res) => {
     // The extension lives on a chrome-extension:// origin; allow it.
     res.setHeader("Access-Control-Allow-Origin", "*");

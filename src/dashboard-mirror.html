@@ -1,0 +1,762 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230f0f13'/%3E%3Ccircle cx='16' cy='16' r='9.1' fill='none' stroke='%236c63ff' stroke-width='1.8'/%3E%3Cpath d='M16 9.4 Q16 16 22.6 16 Q16 16 16 22.6 Q16 16 9.4 16 Q16 16 16 9.4 Z' fill='%236c63ff'/%3E%3C/svg%3E" />
+<title>Let Trade Copieur — Tableau de bord</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet" />
+<style>
+  :root {
+    /* Identité « néo » partagée avec Let-Trade Journal : nuit profonde, indigo électrique + bleu
+       néon, verre dépoli, lueurs. Code couleur maison : BLEU = bon (jamais de vert), rouge, jaune. */
+    --bg:#09090c; --card:rgba(20,20,30,.62); --card2:rgba(28,28,42,.72); --border:rgba(255,255,255,.08);
+    --txt:#f0f0f6; --txt2:#9a9ab4; --txt3:#5e5e78;
+    --accent:#635bff; --accent2:#4f7cff; --accent-glow:rgba(99,91,255,.35);
+    --green:#4f7cff; --red:#f26e8a; --amber:#fbbf24;
+    --mono:'Geist Mono','JetBrains Mono',ui-monospace,'SF Mono',Menlo,monospace;
+    --display:'Space Grotesk','Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    --glass-hi:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,0) 40%);
+  }
+  .logo { width:28px; height:28px; vertical-align:-7px; margin-right:11px; flex:none; color:var(--accent); }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body {
+    background:var(--bg); color:var(--txt); min-height:100vh;
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-size:15px;
+    padding:24px; -webkit-font-smoothing:antialiased;
+  }
+  .wrap { max-width:920px; margin:0 auto; }
+
+  header { display:flex; align-items:center; gap:14px; flex-wrap:wrap; margin-bottom:6px; }
+  h1 { font-size:20px; font-weight:800; letter-spacing:-.3px; }
+  h1 .dot-live { width:9px; height:9px; border-radius:50%; display:inline-block; margin-right:8px; vertical-align:middle; }
+  .badge { font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; padding:3px 9px; border-radius:6px; border:1px solid var(--border); color:var(--txt2); }
+  .badge.live { color:var(--red); border-color:rgba(251,113,133,.4); }
+  .badge.demo { color:var(--accent); border-color:rgba(108,99,255,.4); }
+  .badge.dry  { color:var(--amber); border-color:rgba(251,191,36,.4); }
+  .sub { color:var(--txt2); font-size:13px; margin:2px 0 22px; font-family:var(--mono); }
+  .sub b { color:var(--txt); }
+
+  .section-h { font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--txt3); margin:24px 0 10px; font-family:var(--mono); display:flex; align-items:center; gap:10px; }
+
+  .acct {
+    display:flex; align-items:center; gap:14px; padding:14px 18px;
+    background:var(--card); border:1px solid var(--border); border-radius:12px; margin-bottom:8px;
+  }
+  .acct.master { border-color:rgba(108,99,255,.45); background:linear-gradient(180deg,rgba(108,99,255,.06),var(--card)); }
+  .acct .dot { width:11px; height:11px; border-radius:50%; flex:none; }
+  .acct .dot.on  { background:var(--green); box-shadow:0 0 0 4px rgba(52,211,153,.14), 0 0 10px rgba(52,211,153,.5); }
+  .acct .dot.off { background:var(--red);   box-shadow:0 0 0 4px rgba(251,113,133,.12); }
+  .acct .name { font-weight:700; font-size:15px; }
+  .acct .meta { font-family:var(--mono); font-size:12px; color:var(--txt2); margin-top:2px; }
+  .acct .grow { flex:1; min-width:0; }
+  .acct .mult { font-family:var(--mono); font-size:13px; font-weight:700; color:var(--accent); }
+  /* Follower décoché : on grise tout SAUF l'interrupteur (pour pouvoir le réactiver). */
+  .acct.nocopy > *:not(.tgl) { opacity:.45; }
+  .tag-off { font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.08em; color:var(--red); background:rgba(251,113,133,.12); padding:2px 7px; border-radius:5px; }
+  .tgl { position:relative; width:36px; height:21px; flex:none; cursor:pointer; }
+  .tgl input { display:none; }
+  .tgl span { position:absolute; inset:0; background:rgba(255,255,255,.06); border:1px solid var(--border); border-radius:999px; transition:all .15s; }
+  .tgl span::after { content:''; position:absolute; top:2.5px; left:3px; width:13px; height:13px; border-radius:50%; background:#8b8b96; transition:all .15s; }
+  .tgl input:checked + span { background:rgba(52,211,153,.22); border-color:var(--green); }
+  .tgl input:checked + span::after { left:17px; background:var(--green); }
+  .mult-in { width:50px; font-family:var(--mono); font-size:13px; font-weight:700; color:var(--accent); background:rgba(255,255,255,.04); border:1px solid var(--border); border-radius:6px; padding:3px 2px 3px 5px; text-align:center; }
+  .mult-in:focus { outline:none; border-color:var(--accent); }
+  .acct .state { font-family:var(--mono); font-size:12px; font-weight:700; }
+  .acct .state.on  { color:var(--green); }
+  .acct .state.off { color:var(--red); }
+  .acct .state.warn { color:var(--amber); cursor:help; }
+  .acct.drifting { border-color:rgba(251,113,133,.55); box-shadow:inset 3px 0 0 var(--red); }
+  .acct .drift { margin-top:8px; font-family:var(--mono); font-size:12px; font-weight:700; color:var(--red); background:rgba(251,113,133,.10); border:1px solid rgba(251,113,133,.35); border-radius:7px; padding:6px 10px; }
+  .acct .drift b { color:var(--red); }
+  .drift-banner { background:linear-gradient(180deg,rgba(251,113,133,.16),rgba(251,113,133,.07)); border:1px solid rgba(251,113,133,.5); border-radius:12px; padding:11px 16px; margin-bottom:14px; font-size:13.5px; color:var(--txt); }
+  .tag-master { font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.08em; color:var(--accent); background:rgba(108,99,255,.12); padding:2px 7px; border-radius:5px; }
+  .acct .pos { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; }
+  .poschip { font-family:var(--mono); font-size:11px; font-weight:700; padding:2px 8px; border-radius:5px; border:1px solid var(--border); }
+  .poschip.long  { color:var(--green); border-color:rgba(52,211,153,.35); background:rgba(52,211,153,.08); }
+  .poschip.short { color:var(--red);   border-color:rgba(251,113,133,.35); background:rgba(251,113,133,.08); }
+
+  /* license / Edge gate banner */
+  .lic { font-family:var(--mono); font-size:13px; line-height:1.45; padding:13px 16px; border-radius:10px; margin-bottom:18px; border:1px solid; }
+  .lic.err  { color:var(--red);   border-color:rgba(251,113,133,.4); background:rgba(251,113,133,.08); }
+  .lic.warn { color:var(--amber); border-color:rgba(251,191,36,.4); background:rgba(251,191,36,.08); }
+  .lic code { background:var(--card2); padding:1px 5px; border-radius:4px; color:var(--txt); }
+  .badge.edge { color:var(--green); border-color:rgba(52,211,153,.4); }
+
+  /* ARMÉ / DÉSARMÉ switch */
+  .arm { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:16px 20px; border-radius:14px; margin-bottom:18px; border:1px solid; }
+  .arm.on  { background:rgba(52,211,153,.07); border-color:rgba(52,211,153,.4); }
+  .arm.off { background:var(--card); border-color:var(--border); }
+  .arm-state { display:flex; align-items:center; gap:14px; min-width:0; }
+  .arm-dot { width:14px; height:14px; border-radius:50%; flex:none; }
+  .arm.on  .arm-dot { background:var(--green); box-shadow:0 0 0 5px rgba(52,211,153,.16), 0 0 12px rgba(52,211,153,.6); animation:pulse 1.8s ease-in-out infinite; }
+  .arm.off .arm-dot { background:var(--txt3); }
+  .arm-title { font-size:16px; font-weight:800; letter-spacing:-.2px; }
+  .arm.on  .arm-title { color:var(--green); }
+  .arm.off .arm-title { color:var(--txt2); }
+  .arm-sub { font-family:var(--mono); font-size:12px; color:var(--txt3); margin-top:2px; }
+  .arm-btn { font-family:var(--mono); font-size:14px; font-weight:800; letter-spacing:.04em; padding:12px 26px; border-radius:10px; border:1px solid transparent; cursor:pointer; flex:none; transition:opacity .15s; }
+  .arm.off .arm-btn { background:var(--green); color:#06121d; }
+  .arm.on  .arm-btn { background:transparent; color:var(--red); border-color:rgba(251,113,133,.45); }
+  .arm-btn:hover { opacity:.85; }
+  .arm-actions { display:flex; align-items:center; gap:10px; flex:none; }
+  .flat-btn { font-family:var(--mono); font-size:13px; font-weight:800; letter-spacing:.03em; padding:12px 18px; border-radius:10px; cursor:pointer; flex:none; background:transparent; color:var(--red); border:1px solid rgba(251,113,133,.5); transition:opacity .15s,background .15s; }
+  .flat-btn:hover { background:var(--red); color:#fff; }
+  .flat-btn:disabled { opacity:.6; cursor:default; }
+  .mk-master { font-family:var(--mono); font-size:11px; font-weight:700; color:var(--accent); background:rgba(108,99,255,.1); border:1px solid rgba(108,99,255,.3); padding:5px 11px; border-radius:6px; cursor:pointer; flex:none; }
+  .mk-master:hover { background:rgba(108,99,255,.2); }
+  .row-actions { display:flex; gap:4px; align-items:center; flex:none; }
+  .rbtn { font-family:var(--mono); font-size:13px; font-weight:700; color:var(--txt3); background:var(--card2); border:1px solid var(--border); width:26px; height:26px; border-radius:6px; cursor:pointer; line-height:1; display:flex; align-items:center; justify-content:center; padding:0; transition:background .12s,color .12s,border-color .12s; }
+  .rbtn:hover { color:var(--txt); border-color:var(--txt3); }
+  .rbtn:disabled { opacity:.3; cursor:default; }
+  .rbtn.del:hover { color:#fff; background:var(--red); border-color:var(--red); }
+  .rbtn.spin { animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .acct.masked { opacity:.72; }
+  .acct.masked .name { font-family:var(--mono); font-size:13px; }
+  .masked-hint { color:var(--txt3); font-size:12px; line-height:1.5; margin:-2px 0 10px; max-width:640px; }
+  .rbtn.restore { width:auto; padding:0 12px; gap:6px; font-size:12px; color:var(--txt2); }
+  .rbtn.restore:hover { color:#fff; background:var(--accent,#6c63ff); border-color:var(--accent,#6c63ff); }
+  .acct .drag { cursor:grab; color:var(--txt3); font-size:16px; line-height:1; padding:0 2px; margin-right:2px; flex:none; user-select:none; -webkit-user-select:none; touch-action:none; }
+  .acct .drag:hover { color:var(--txt); }
+  .acct .drag:active { cursor:grabbing; }
+  .acct.drag-src { opacity:.4; }
+  .acct.drop-before { box-shadow:inset 0 3px 0 var(--accent,#6c63ff); }
+  .acct.drop-after  { box-shadow:inset 0 -3px 0 var(--accent,#6c63ff); }
+  .upd { display:flex; align-items:center; gap:14px; background:linear-gradient(180deg,rgba(108,99,255,.16),rgba(108,99,255,.07)); border:1px solid rgba(108,99,255,.5); border-radius:12px; padding:12px 16px; margin-bottom:16px; }
+  .upd .upd-txt { flex:1; font-size:13.5px; font-weight:700; color:var(--txt); }
+  .upd .upd-sub { font-weight:400; color:var(--txt2); font-size:12px; }
+  .upd.upd-err { background:linear-gradient(180deg,rgba(251,113,133,.16),rgba(251,113,133,.07)); border-color:rgba(251,113,133,.5); }
+  .upd button { font-family:inherit; font-size:13px; font-weight:700; color:#fff; background:var(--accent); border:none; border-radius:8px; padding:9px 18px; cursor:pointer; flex:none; }
+  .upd button:hover { filter:brightness(1.12); }
+  .upd button:disabled { opacity:.6; cursor:default; }
+  .toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(20px); background:var(--card2); border:1px solid var(--border); color:var(--txt); font-family:var(--mono); font-size:13px; padding:11px 18px; border-radius:10px; opacity:0; pointer-events:none; transition:opacity .25s, transform .25s; z-index:50; box-shadow:0 8px 30px rgba(0,0,0,.5); }
+  .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+
+  /* live order log */
+  .livedot { font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.08em; padding:2px 8px; border-radius:5px; }
+  .livedot.on  { color:var(--green); background:rgba(52,211,153,.12); }
+  .livedot.on::before { content:'● '; }
+  .livedot.off { color:var(--txt3); background:var(--card2); }
+  .livedot.off::before { content:'○ '; }
+  .log { display:flex; flex-direction:column; gap:6px; max-height:440px; overflow-y:auto; }
+  .logrow { display:flex; align-items:center; gap:12px; padding:11px 15px; background:var(--card); border:1px solid var(--border); border-left:3px solid var(--txt3); border-radius:9px; font-family:var(--mono); }
+  .logrow.ok   { border-left-color:var(--green); }
+  .logrow.warn { border-left-color:var(--amber); }
+  .logrow.err  { border-left-color:var(--red); }
+
+  /* ── NÉO : verre dépoli, lueurs, HUD (même identité que le journal) ─────────── */
+  body {
+    font-family:'Geist','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    background-image:
+      radial-gradient(900px 480px at 50% -10%, rgba(99,91,255,.18), transparent 60%),
+      radial-gradient(rgba(255,255,255,.035) 1px, transparent 1.2px);
+    background-size:auto, 26px 26px; background-attachment:fixed, fixed;
+  }
+  h1 { font-family:var(--display); letter-spacing:-.02em; }
+  .logo { filter:drop-shadow(0 0 10px rgba(99,91,255,.6)); }
+  .section-h { letter-spacing:.14em; }
+  .section-h::before { content:''; display:inline-block; width:10px; height:1px; background:var(--accent2); box-shadow:0 0 8px var(--accent2); }
+  .acct, .arm, .lic, .upd, .drift-banner, .logrow, .toast, .techlog {
+    -webkit-backdrop-filter:blur(14px) saturate(140%); backdrop-filter:blur(14px) saturate(140%);
+    box-shadow:inset 0 1px 0 rgba(255,255,255,.05), 0 4px 16px rgba(0,0,0,.35);
+  }
+  .acct { position:relative; transition:transform .2s ease, box-shadow .25s ease, border-color .2s ease; }
+  .acct::before { content:''; position:absolute; inset:0; border-radius:inherit; background:var(--glass-hi); pointer-events:none; }
+  .acct:hover { transform:translateY(-1px); border-color:rgba(124,116,255,.35); }
+  .acct.master { border-color:rgba(124,116,255,.55); box-shadow:0 0 0 1px rgba(124,116,255,.25), 0 8px 28px rgba(99,91,255,.22), inset 0 1px 0 rgba(255,255,255,.06); }
+  .acct .dot.on { box-shadow:0 0 0 4px rgba(79,124,255,.16), 0 0 12px rgba(79,124,255,.7); }
+  .arm.on { background:linear-gradient(180deg, rgba(99,91,255,.14), rgba(79,124,255,.05)); border-color:rgba(124,116,255,.55); box-shadow:0 0 0 1px rgba(124,116,255,.25), 0 10px 32px rgba(99,91,255,.25); }
+  .arm.on .arm-dot { background:var(--accent2); box-shadow:0 0 0 5px rgba(79,124,255,.16), 0 0 14px rgba(79,124,255,.8); }
+  .arm.on .arm-title { color:var(--accent2); font-family:var(--display); }
+  .arm.off .arm-btn { background:linear-gradient(135deg,#7c74ff,#635bff 48%,#4f7cff); color:#fff; box-shadow:inset 0 1px 0 rgba(255,255,255,.22), 0 4px 18px rgba(99,91,255,.4); }
+  .upd button, button.primary { background:linear-gradient(135deg,#7c74ff,#635bff 48%,#4f7cff); box-shadow:inset 0 1px 0 rgba(255,255,255,.22), 0 4px 18px rgba(99,91,255,.36); }
+  .badge.edge, .tag-master, .mk-master { color:var(--accent2); border-color:rgba(79,124,255,.45); }
+  .poschip.long { color:var(--accent2); border-color:rgba(79,124,255,.4); background:rgba(79,124,255,.08); }
+  .livedot.on { color:var(--accent2); background:rgba(79,124,255,.12); text-shadow:0 0 8px rgba(79,124,255,.7); }
+  .logrow.ok { border-left-color:var(--accent2); }
+  ::selection { background:rgba(99,91,255,.45); color:#fff; }
+  ::-webkit-scrollbar { width:5px; } ::-webkit-scrollbar-thumb { background:rgba(124,116,255,.35); border-radius:10px; }
+  @media (prefers-reduced-motion: reduce) { .acct { transition:none; } }
+  .logrow .t { color:var(--txt3); font-size:12px; flex:none; }
+  .logrow .chip { font-size:10px; font-weight:700; letter-spacing:.06em; padding:2px 7px; border-radius:5px; background:var(--card2); color:var(--txt2); flex:none; }
+  .logrow .chip.new    { color:var(--accent); }
+  .logrow .chip.cancel { color:var(--amber); }
+  .logrow .chip.modify { color:var(--txt); }
+  .logrow .chip.blocked { color:var(--red); }
+  .logrow .lat { color:var(--txt3); font-weight:600; }
+  .logrow .lat.slow { color:var(--amber); }
+  .logrow .desc { color:var(--txt); font-weight:600; font-size:13.5px; flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .logrow .res { font-size:12.5px; font-weight:700; flex:none; }
+  .logrow .res.ok   { color:var(--green); }
+  .logrow .res.warn { color:var(--amber); }
+  .logrow .res.err  { color:var(--red); }
+  @keyframes flashin { from { background:rgba(108,99,255,.20); } to { background:var(--card); } }
+  .logrow.flash { animation:flashin .8s ease; }
+  .log-empty { color:var(--txt3); font-family:var(--mono); font-size:13px; padding:18px; text-align:center; border:1px dashed var(--border); border-radius:9px; }
+
+  .offline { text-align:center; padding:60px 20px; color:var(--txt2); }
+  .offline .big { font-size:16px; color:var(--txt); font-weight:700; margin-bottom:8px; }
+  .offline code { font-family:var(--mono); background:var(--card2); border:1px solid var(--border); padding:2px 7px; border-radius:5px; color:var(--amber); }
+
+  .tech-h { cursor:pointer; user-select:none; }
+  .tech-h #tech-caret { display:inline-block; transition:transform .15s; font-size:10px; }
+  .tech-h.open #tech-caret { transform:rotate(90deg); }
+  .tech-copy { margin-left:auto; font-family:var(--mono); font-size:11px; font-weight:600; color:var(--txt2); background:var(--card2); border:1px solid var(--border); padding:4px 10px; border-radius:7px; cursor:pointer; }
+  .tech-copy:hover { color:var(--txt); border-color:var(--txt3); }
+  .techlog { background:#0d0d15; border:1px solid var(--border); border-radius:9px; padding:12px 14px; font-family:var(--mono); font-size:11.5px; line-height:1.55; color:var(--txt2); max-height:280px; overflow:auto; white-space:pre-wrap; word-break:break-word; }
+  .techlog .lv-error { color:var(--red); }
+  .techlog .lv-warn  { color:var(--amber); }
+  .techlog .log-empty { color:var(--txt3); text-align:center; padding:14px; }
+  footer { margin-top:28px; color:var(--txt3); font-family:var(--mono); font-size:11px; text-align:center; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
+  .pulsing { animation:pulse 1.6s ease-in-out infinite; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <div id="update-banner" class="upd" style="display:none"></div>
+    <div id="top">
+      <div class="offline"><div class="big pulsing">Connexion au copieur…</div></div>
+    </div>
+
+    <div class="section-h">Journal des ordres copiés <span class="livedot off" id="livedot">live</span></div>
+    <div id="log" class="log">
+      <div class="log-empty">En attente d'un ordre sur le compte maître…</div>
+    </div>
+
+    <div class="section-h tech-h" id="tech-h" title="Diagnostic du moteur — utile pour le support">
+      <span id="tech-caret">▸</span> Journal technique
+      <button id="tech-copy" class="tech-copy" style="display:none">Copier</button>
+    </div>
+    <div id="tech" class="techlog" style="display:none"></div>
+
+    <footer>Tableau de bord local · 127.0.0.1:7879</footer>
+  </div>
+
+<script>
+  const $ = (h) => { const t = document.createElement('template'); t.innerHTML = h.trim(); return t.content.firstChild; };
+  const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  let lastOk = 0;
+
+  // ---- account status (polled) ----
+  function posStrip(positions) {
+    const ps = (positions || []).filter(p => p.netPos);
+    if (!ps.length) return '';
+    return '<div class="pos">' + ps.map(p => {
+      const long = p.netPos > 0;
+      const px = (p.netPrice != null && p.netPrice !== 0) ? ' @' + p.netPrice : '';
+      return `<span class="poschip ${long ? 'long' : 'short'}">${esc(p.symbol)} ${long ? '+' : ''}${p.netPos}${px}</span>`;
+    }).join('') + '</div>';
+  }
+
+  // Bandeau de dérive d'un compte : sa position réelle ≠ celle attendue depuis le maître.
+  function driftStrip(drift) {
+    const ds = drift || [];
+    if (!ds.length) return '';
+    const sgn = n => (n >= 0 ? '+' : '') + n;
+    return '<div class="drift">⚠ DÉSYNC — ' + ds.map(d =>
+      esc(d.symbol) + ' : attendu <b>' + sgn(d.expected) + '</b> · réel <b>' + sgn(d.actual) + '</b>'
+    ).join(' &nbsp;·&nbsp; ') + '</div>';
+  }
+
+  function acctRow(a, isMaster, idx, total) {
+    const on = !!a.connected;
+    const en = a.enabled !== false;
+    const spec = a.account || a.label;
+    const drifting = !isMaster && (a.drift || []).length > 0;
+    // État : connecté ; sinon "à reconnecter" si le compte n'a jamais été résolu
+    // (session/token Tradovate absent) ; sinon simple déconnexion transitoire.
+    const resolved = isMaster ? true : !!a.accountId;
+    const stateHtml = on
+      ? '<span class="state on">● connecté</span>'
+      : (!resolved
+          ? '<span class="state warn" title="Cette session Tradovate n\'est pas connectée. Ouvre/rafraîchis ce compte dans ton navigateur (extension active) pour repousser un token frais.">⚠ session à reconnecter</span>'
+          : '<span class="state off">○ déconnecté</span>');
+    const dz = !isMaster ? ` data-spec="${esc(spec)}" ondragover="rowDragOver(event)" ondragleave="rowDragLeave(event)" ondrop="rowDrop(event,'${esc(spec)}')"` : '';
+    return `
+      <div class="acct ${isMaster ? 'master' : ''} ${!isMaster && !en ? 'nocopy' : ''} ${drifting ? 'drifting' : ''}"${dz}>
+        ${!isMaster ? `<span class="drag" draggable="true" ondragstart="rowDragStart(event,'${esc(spec)}')" ondragend="rowDragEnd(event)" title="Glisser pour réordonner">⠿</span>` : ''}
+        <span class="dot ${on ? 'on' : 'off'}"></span>
+        ${!isMaster ? `<label class="tgl" title="${en ? 'Copie active — décoche pour exclure ce compte' : 'Exclu de la copie — coche pour réactiver'}"><input type="checkbox" ${en ? 'checked' : ''} onchange="setFollowerEnabled('${esc(spec)}', this.checked)"><span></span></label>` : ''}
+        <div class="grow">
+          <div class="name">${esc(a.label)} ${isMaster ? '<span class="tag-master">MAÎTRE</span>' : ''}${!isMaster && !en ? ' <span class="tag-off">NE COPIE PAS</span>' : ''}</div>
+          <div class="meta">${a.account ? esc(a.account) : '— compte non résolu —'}${a.accountId ? ' · #' + a.accountId : ''}</div>
+          ${posStrip(a.positions)}
+          ${!isMaster ? driftStrip(a.drift) : ''}
+        </div>
+        ${!isMaster && a.account ? `<button class="mk-master" onclick="setMaster('${esc(a.account)}')" title="Définir comme compte maître">↑ maître</button>` : ''}
+        ${!isMaster ? `<span class="mult">×</span><input class="mult-in" type="number" min="0" max="100" step="0.5" value="${a.multiplier}" data-spec="${esc(spec)}" onchange="setFollowerMult('${esc(spec)}', this.value)" onkeydown="if(event.key==='Enter')this.blur()" title="Multiplicateur de taille vs le maître (ex. 2 = double ; arrondi à l'unité inférieure : 1 lot × 0,5 → ignoré)">` : ''}
+        ${!isMaster ? `<span class="row-actions">
+          <button class="rbtn" onclick="refreshFollower('${esc(spec)}', this)" title="Actualiser — force une reconnexion de ce compte">⟳</button>
+          <button class="rbtn" ${idx === 0 ? 'disabled' : ''} onclick="moveFollower('${esc(spec)}',-1)" title="Monter">↑</button>
+          <button class="rbtn" ${idx >= total - 1 ? 'disabled' : ''} onclick="moveFollower('${esc(spec)}',1)" title="Descendre">↓</button>
+          <button class="rbtn del" onclick="removeFollower('${esc(spec)}','${esc(a.label)}')" title="Retirer ce compte du copieur">✕</button>
+        </span>` : ''}
+        ${stateHtml}
+      </div>`;
+  }
+
+  // Comptes retirés du copieur (dans removedSpecs) → « Rechercher de nouveaux comptes »
+  // les ignore. Un bouton « Réafficher » les sort de l'ignore-list.
+  function maskedSection(specs) {
+    if (!specs || !specs.length) return '';
+    return `
+      <div class="section-h">Comptes masqués (${specs.length})</div>
+      <div class="masked-hint">Retirés du copieur : « Rechercher de nouveaux comptes » les ignore. Réaffiche-les pour qu'ils réapparaissent au prochain scan (le compte doit être connecté à Tradovate).</div>
+      ${specs.map(s => `
+        <div class="acct masked">
+          <span class="dot off" style="opacity:.5"></span>
+          <div class="grow">
+            <div class="name">${esc(s)}</div>
+            <div class="meta">masqué — retiré du copieur</div>
+          </div>
+          <button class="rbtn restore" onclick="restoreFollower('${esc(s)}')" title="Réafficher ce compte">↩ Réafficher</button>
+        </div>`).join('')}`;
+  }
+
+  // Réaffiche un compte masqué → le sort de l'ignore-list, puis invite au rescan.
+  window.restoreFollower = (spec) => {
+    (async () => {
+      try {
+        const r = await fetch('/api/restore', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spec }) });
+        const d = await r.json().catch(() => ({}));
+        showToast(d.ok ? ('↩ ' + spec + ' réaffiché — clique « Rechercher de nouveaux comptes »') : ('Échec : ' + (d.error || 'erreur')));
+      } catch (_) { showToast('Serveur injoignable'); }
+      await refresh();
+    })();
+  };
+
+  function blurTopInput() {
+    const ae = document.activeElement;
+    if (ae && ae.tagName === 'INPUT' && ae.closest && ae.closest('#top')) ae.blur();
+  }
+  async function patchFollower(spec, body, okMsg) {
+    try {
+      const r = await fetch('/api/follower', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spec, ...body }) });
+      const d = await r.json().catch(() => ({}));
+      // Toast de succès UNIQUEMENT après confirmation du moteur — jamais en avance.
+      if (d.ok) showToast(okMsg);
+      else { showToast('Échec : ' + (d.error || 'erreur')); blurTopInput(); }
+      await refresh();
+    } catch (_) { showToast('Serveur injoignable'); blurTopInput(); await refresh(); }
+  }
+  window.setFollowerEnabled = (spec, on) => {
+    // Garde-fous "position ouverte" : réactiver pendant que le maître est en position
+    // → le compte copierait la SORTIE comme une entrée inverse ; désactiver pendant
+    // que CE compte porte une position copiée → la sortie ne serait plus copiée.
+    const s = lastState;
+    if (on && s && s.master && (s.master.positions || []).length) {
+      if (!window.confirm('⚠ Le maître a une position OUVERTE.\n\nCe compte copiera le PROCHAIN ordre du maître — y compris la SORTIE de la position en cours (le compte prendrait alors une position inverse, sans avoir l\'entrée).\n\nRecommandé : réactiver quand le maître est À PLAT.\n\nRéactiver quand même ?')) { refresh(); return; }
+    }
+    if (!on && s) {
+      const f = (s.followers || []).find(x => (x.account || x.label) === spec);
+      if (f && (f.positions || []).length) {
+        if (!window.confirm('⚠ Ce compte a une position OUVERTE (copiée).\n\nSi tu le décoches, la sortie du maître ne sera PAS copiée : la position restera ouverte sur ce compte, à gérer manuellement.\n\nRecommandé : décocher quand le compte est À PLAT.\n\nDécocher quand même ?')) { refresh(); return; }
+      }
+    }
+    patchFollower(spec, { enabled: on }, on ? ('✓ ' + spec + ' copiera les prochains ordres') : (spec + ' exclu de la copie'));
+  };
+  window.setFollowerMult = (spec, m) => {
+    const v = parseFloat(m);
+    if (!isFinite(v) || v < 0 || v > 100) { showToast('Multiplicateur invalide (0 à 100)'); return; }
+    patchFollower(spec, { multiplier: v }, '✓ ' + spec + ' → ×' + v);
+  };
+
+  // Retire un compte du copieur (bouton ✕). Garde-fou "position ouverte" + confirmation.
+  window.removeFollower = (spec, label) => {
+    const s = lastState;
+    const f = ((s && s.followers) || []).find(x => (x.account || x.label) === spec);
+    if (f && (f.positions || []).length) {
+      if (!window.confirm('⚠ « ' + label + ' » a une position OUVERTE (copiée).\n\nSi tu le retires, la sortie du maître ne sera PAS copiée : la position restera ouverte sur ce compte, à gérer manuellement.\n\nRetirer quand même ?')) return;
+    }
+    if (!window.confirm('Retirer « ' + label + ' » du copieur ?\n\nIl ne recevra plus les ordres du maître, et « Rechercher de nouveaux comptes » ne le ré-ajoutera pas. (Ton compte Tradovate n\'est pas touché.)')) return;
+    (async () => {
+      try {
+        const r = await fetch('/api/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spec }) });
+        const d = await r.json().catch(() => ({}));
+        showToast(d.ok ? ('✕ ' + label + ' retiré') : ('Échec : ' + (d.error || 'erreur')));
+      } catch (_) { showToast('Serveur injoignable'); }
+      await refresh();
+    })();
+  };
+
+  // Persiste l'ordre complet des followers (source unique : ↑↓ ET glisser-déposer).
+  // Toast de confirmation → l'utilisateur VOIT que c'est mémorisé.
+  async function persistOrder(order) {
+    try {
+      const r = await fetch('/api/reorder', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order }) });
+      const d = await r.json().catch(() => ({}));
+      showToast(d.ok ? '✓ Ordre enregistré' : ('Échec : ' + (d.error || 'erreur')));
+    } catch (_) { showToast('Serveur injoignable'); }
+    await refresh();
+  }
+
+  // Actualiser un compte : force une reconnexion immédiate de son login + re-résolution.
+  window.refreshFollower = async (spec, btn) => {
+    if (btn) { btn.disabled = true; btn.classList.add('spin'); }
+    try {
+      const r = await fetch('/api/refresh', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ spec }) });
+      const d = await r.json().catch(() => ({}));
+      if (d.connected) showToast('✓ ' + spec + ' reconnecté');
+      else if (d.error && /inconnu/i.test(d.error)) showToast('Échec : ' + d.error);
+      else showToast('⚠ ' + spec + ' toujours déconnecté — ouvre/rafraîchis sa session Tradovate dans le navigateur (l’extension repoussera un token frais).');
+    } catch (_) { showToast('Serveur injoignable'); }
+    await refresh(); // re-render (le bouton est recréé, spinner remis à zéro)
+  };
+
+  // Réordonne : échange le compte avec son voisin dans la direction dir (-1 haut / +1 bas).
+  window.moveFollower = (spec, dir) => {
+    const s = lastState; if (!s) return;
+    const order = (s.followers || []).map(f => f.account || f.label);
+    const i = order.indexOf(spec), j = i + dir;
+    if (i < 0 || j < 0 || j >= order.length) return; // bord de liste
+    [order[i], order[j]] = [order[j], order[i]];
+    persistOrder(order);
+  };
+
+  // ---- Glisser-déposer pour réordonner (plus simple que les ↑↓) ----
+  let dragging = false, dragSrc = null;
+  function clearDropMarks() {
+    document.querySelectorAll('.acct.drag-src,.acct.drop-before,.acct.drop-after')
+      .forEach(el => el.classList.remove('drag-src', 'drop-before', 'drop-after'));
+  }
+  window.rowDragStart = (ev, spec) => {
+    dragSrc = spec; dragging = true;
+    try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', spec); } catch (_) {}
+    const row = ev.target.closest && ev.target.closest('.acct');
+    if (row) row.classList.add('drag-src');
+  };
+  window.rowDragOver = (ev) => {
+    if (!dragging) return;
+    ev.preventDefault();
+    try { ev.dataTransfer.dropEffect = 'move'; } catch (_) {}
+    const row = ev.currentTarget;
+    if (row.classList.contains('drag-src')) return;
+    const rect = row.getBoundingClientRect();
+    const after = (ev.clientY - rect.top) > rect.height / 2;
+    row.classList.toggle('drop-after', after);
+    row.classList.toggle('drop-before', !after);
+  };
+  window.rowDragLeave = (ev) => {
+    ev.currentTarget.classList.remove('drop-before', 'drop-after');
+  };
+  window.rowDrop = (ev, targetSpec) => {
+    ev.preventDefault();
+    const row = ev.currentTarget;
+    const rect = row.getBoundingClientRect();
+    const after = (ev.clientY - rect.top) > rect.height / 2;
+    const src = dragSrc;
+    dragging = false; dragSrc = null; clearDropMarks();
+    if (!src || src === targetSpec) { refresh(); return; }
+    const specs = ((lastState && lastState.followers) || []).map(f => f.account || f.label);
+    const from = specs.indexOf(src);
+    if (from < 0) { refresh(); return; }
+    specs.splice(from, 1);
+    let to = specs.indexOf(targetSpec);
+    if (to < 0) { refresh(); return; }
+    if (after) to += 1;
+    specs.splice(to, 0, src);
+    persistOrder(specs);
+  };
+  window.rowDragEnd = () => {
+    dragging = false; dragSrc = null; clearDropMarks();
+    refresh();
+  };
+
+  function licBanner(lic) {
+    if (!lic || (lic.licensed && !lic.graceActive)) return '';
+    if (lic.graceActive) {
+      return '<div class="lic warn">⚠ Vérification de la licence impossible (backend injoignable) — la copie reste active temporairement (grâce). Reconnecte-toi à internet.</div>';
+    }
+    if (!lic.hasKey) {
+      return '<div class="lic err">🔒 Copie désactivée — aucune clé de licence. Colle ta clé <b>Edge</b> dans <code>config.json</code> (champ <code>"license"</code>), puis relance.</div>';
+    }
+    return `<div class="lic err">🔒 Copie désactivée — abonnement <b>Edge</b> requis${lic.plan ? ` (plan actuel : <b>${esc(lic.plan)}</b>)` : ''}. La lecture du dashboard reste disponible.</div>`;
+  }
+
+  // Bandeau récap : au moins un follower est désynchronisé du maître.
+  function driftBanner(followers) {
+    const bad = (followers || []).filter(f => (f.drift || []).length);
+    if (!bad.length) return '';
+    const names = bad.map(f => esc(f.label)).join(', ');
+    return `<div class="drift-banner">⚠ <b>${bad.length} compte(s) désynchronisé(s)</b> du maître (${names}) — position réelle ≠ attendue. Vérifie les comptes marqués ci-dessous.</div>`;
+  }
+
+  function armBar(active) {
+    return `
+      <div class="arm ${active ? 'on' : 'off'}">
+        <div class="arm-state">
+          <span class="arm-dot"></span>
+          <div>
+            <div class="arm-title">${active ? 'ARMÉ — la copie est active' : 'DÉSARMÉ — copie en pause'}</div>
+            <div class="arm-sub">${active ? 'Tes ordres maître sont répliqués en temps réel.' : 'Arme le copieur avant de trader. Rien n’est copié tant qu’il est en pause.'}</div>
+          </div>
+        </div>
+        <div class="arm-actions">
+          <button class="flat-btn" onclick="flattenAll()" title="Annule tous les ordres en attente et clôture toutes les positions, sur tous les comptes">🚨 Flatten All</button>
+          <button class="arm-btn" onclick="setArmed(${active ? 'false' : 'true'})">${active ? 'DÉSARMER' : 'ARMER'}</button>
+        </div>
+      </div>`;
+  }
+
+  // Bouton panique : met TOUS les comptes à plat (ordres annulés + positions clôturées).
+  window.flattenAll = async () => {
+    const s = lastState;
+    const openPos = (((s && s.master && s.master.positions) || []).length)
+      + (((s && s.followers) || []).reduce((n, f) => n + ((f.positions || []).length), 0));
+    const msg = '🚨 FLATTEN ALL — mise à plat d’urgence\n\n'
+      + 'Sur TOUS tes comptes (maître + followers) :\n'
+      + '• annuler TOUS les ordres en attente (limit + stop)\n'
+      + '• CLÔTURER toutes les positions ouvertes AU MARCHÉ'
+      + (openPos ? `\n\n(${openPos} position(s) ouverte(s) actuellement)` : '')
+      + '\n\nLe copieur sera DÉSARMÉ. Continuer ?';
+    if (!window.confirm(msg)) return;
+    const btns = document.querySelectorAll('.flat-btn'); btns.forEach(b => { b.disabled = true; b.textContent = '⏳ Mise à plat…'; });
+    try {
+      const r = await fetch('/api/flatten', { method: 'POST' });
+      const d = await r.json().catch(() => ({}));
+      if (d.error) showToast('Échec : ' + d.error);
+      else {
+        let t = `✓ ${d.accounts} compte(s) à plat · ${d.canceled} ordre(s) annulé(s) · ${d.flattened} position(s) clôturée(s)`;
+        if (d.skipped && d.skipped.length) t += ` · ${d.skipped.length} ignoré(s) (déconnecté)`;
+        if (d.errors && d.errors.length) t += ` · ⚠ ${d.errors.length} erreur(s)`;
+        showToast(t);
+      }
+    } catch (_) { showToast('Serveur injoignable'); }
+    await refresh();
+  };
+
+  async function setArmed(on) {
+    try {
+      await fetch('/api/active', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ active: on }) });
+      refresh();
+    } catch (_) { /* server down — the 2s poll will resync */ }
+  }
+  window.setArmed = setArmed;
+
+  function showToast(msg) {
+    let t = document.getElementById('toast');
+    if (!t) { t = document.createElement('div'); t.id = 'toast'; t.className = 'toast'; document.body.appendChild(t); }
+    t.textContent = msg; t.classList.add('show');
+    clearTimeout(t._timer); t._timer = setTimeout(() => t.classList.remove('show'), 4500);
+  }
+
+  async function setMaster(spec) {
+    if (!window.confirm('Définir ' + spec + ' comme compte MAÎTRE ?\n\nLe copieur va redémarrer — fais-le à plat (sans position ouverte).')) return;
+    try {
+      const r = await fetch('/api/master', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ masterSpec: spec }) });
+      const d = await r.json().catch(() => ({}));
+      showToast(d.ok ? ('Maître → ' + spec + ' · redémarrage du copieur…') : ('Échec : ' + (d.error || 'erreur')));
+    } catch (_) { showToast('Serveur injoignable'); }
+  }
+  window.setMaster = setMaster;
+
+  async function rescan(btn) {
+    if (btn) { btn.disabled = true; btn.textContent = '🔄 Recherche…'; }
+    try {
+      const r = await fetch('/api/rescan', { method: 'POST' });
+      const d = await r.json().catch(() => ({}));
+      if (d.error) showToast('Échec : ' + d.error);
+      else if (d.added > 0) showToast('✓ ' + d.added + ' compte(s) ajouté(s) : ' + (d.names || []).join(', '));
+      else showToast('Aucun nouveau compte trouvé.');
+      await refresh();
+    } catch (_) { showToast('Serveur injoignable'); }
+  }
+  window.rescan = rescan;
+
+  let lastState = null;
+  function renderTop(s) {
+    lastState = s;
+    // Pendant un glisser-déposer, ne PAS reconstruire la liste (le poll 2s effacerait
+    // le DOM en plein drag). lastState reste à jour ; le rendu reprend après le drop.
+    if (dragging) return;
+    // Préserve la saisie en cours dans un champ multiplicateur SANS geler le reste
+    // du panneau (un return total figerait l'état ARMÉ/positions tant que le champ
+    // garde le focus — inacceptable sur un copieur live).
+    const ae = document.activeElement;
+    const edit = (ae && ae.classList && ae.classList.contains('mult-in') && ae.dataset)
+      ? { spec: ae.dataset.spec, val: ae.value } : null;
+    const followers = s.followers || [];
+    const connCount = (s.master.connected ? 1 : 0) + followers.filter(f => f.connected).length;
+    const total = 1 + followers.length;
+    const openPos = (s.master.positions || []).length + followers.reduce((n, f) => n + (f.positions || []).length, 0);
+    const env = (s.environment || '').toLowerCase();
+    const lic = s.license;
+    document.getElementById('top').innerHTML = `
+      ${armBar(!!s.active)}
+      ${licBanner(lic)}
+      ${driftBanner(followers)}
+      <header>
+        <h1><svg class="logo" viewBox="0 0 32 32" fill="none"><circle cx="16" cy="16" r="9.1" stroke="currentColor" stroke-width="1.8"/><path d="M16 9.4 Q16 16 22.6 16 Q16 16 16 22.6 Q16 16 9.4 16 Q16 16 16 9.4 Z" fill="currentColor"/></svg>Let Trade Copieur</h1>
+        <span class="badge ${env === 'live' ? 'live' : 'demo'}">${esc(s.environment || '?')}</span>
+        ${s.dryRun ? '<span class="badge dry">dry-run</span>' : ''}
+        ${lic && lic.licensed ? '<span class="badge edge">Edge ✓</span>' : ''}
+      </header>
+      <div class="sub"><b>${connCount}/${total}</b> connecté(s) · <b>${openPos}</b> position(s) ouverte(s)
+        <button onclick="rescan(this)" style="margin-left:14px;background:var(--card2);border:1px solid var(--border);color:var(--txt2);font-size:11.5px;font-weight:600;padding:5px 11px;border-radius:8px;cursor:pointer;vertical-align:middle;">🔄 Rechercher de nouveaux comptes</button>
+      </div>
+
+      <div class="section-h">Compte maître</div>
+      ${acctRow(s.master, true)}
+
+      <div class="section-h">Followers (${followers.length})</div>
+      ${followers.map((f, i) => acctRow(f, false, i, followers.length)).join('')}
+      ${maskedSection(s.removedSpecs)}`;
+    // Re-render fait → on rend sa saisie + son focus au champ multiplicateur édité.
+    if (edit && edit.spec) {
+      const el = document.querySelector('#top .mult-in[data-spec="' + edit.spec.replace(/"/g, '\\"') + '"]');
+      if (el) { el.value = edit.val; el.focus(); }
+    }
+  }
+
+  function offlineTop() {
+    document.getElementById('top').innerHTML = `
+      <div class="offline">
+        <div class="big">Copieur injoignable</div>
+        <div>Lance-le avec <code>npm start</code> (ou vérifie le service), puis recharge.</div>
+      </div>`;
+  }
+
+  async function refresh() {
+    try {
+      const r = await fetch('/api/state', { cache: 'no-store' });
+      if (!r.ok) throw new Error('http ' + r.status);
+      renderTop(await r.json());
+      lastOk = Date.now();
+    } catch (e) {
+      if (Date.now() - lastOk > 6000) offlineTop();
+    }
+  }
+  refresh();
+  setInterval(refresh, 2000);
+
+  // ---- live order-copy log (SSE) ----
+  const KIND = { new: 'ORDRE', cancel: 'ANNULÉ', modify: 'MODIFIÉ', blocked: 'BLOQUÉ' };
+  const fmtTime = (ts) => { const d = new Date(ts), p = n => String(n).padStart(2,'0'); return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
+
+  function addLog(e) {
+    const el = document.getElementById('log');
+    const empty = el.querySelector('.log-empty'); if (empty) empty.remove();
+
+    const legs = e.legs || [];
+    const total = legs.filter(l => l.status !== 'skipped').length;
+    const failed = e.failed || 0;
+    const cls = e.kind === 'blocked' ? 'err' : (failed > 0 ? (e.ok > 0 ? 'warn' : 'err') : 'ok');
+
+    let desc;
+    if (e.kind === 'blocked') {
+      desc = `${String(e.action || '').toUpperCase()} ${e.qty} ${esc(e.symbol || '')} — ${esc(e.note || 'bloqué')}`;
+    } else if (e.kind === 'new') {
+      desc = `${String(e.action || '').toUpperCase()} ${e.qty} ${esc(e.symbol || '')} ${esc(e.orderType || '')}`
+        + (e.price != null ? ` @${e.price}` : '') + (e.stopPrice != null ? ` stop ${e.stopPrice}` : '');
+    } else if (e.kind === 'cancel') {
+      desc = `annulation · ordre #${e.masterOrderId}`;
+    } else {
+      desc = `modification · ordre #${e.masterOrderId}` + (e.qty != null ? ` → qty ${e.qty}` : '');
+    }
+
+    let res;
+    if (e.kind === 'blocked') res = '🔒 non copié';
+    else if (e.kind === 'cancel') res = `${e.ok} annulé(s)`;
+    else {
+      res = `${e.ok}/${total} ✓` + (failed ? ` · ${failed} échec(s)` : '');
+      // Compteur de fluidité : temps décision→ordres envoyés (mesure du slippage de copie).
+      if (e.kind === 'new' && e.latencyMs != null) res += ` · <span class="lat ${e.latencyMs > 500 ? 'slow' : ''}">${e.latencyMs} ms</span>`;
+    }
+
+    const fresh = (Date.now() - (e.ts || 0)) < 4000;
+    const row = $(`<div class="logrow ${cls} ${fresh ? 'flash' : ''}">
+      <span class="t">${fmtTime(e.ts)}</span>
+      <span class="chip ${e.kind}">${KIND[e.kind] || e.kind}</span>
+      <span class="desc">${desc}</span>
+      <span class="res ${cls}">${res}</span>
+    </div>`);
+    const failedLabels = legs.filter(l => l.status === 'failed').map(l => l.label);
+    if (failedLabels.length) row.title = 'Échecs : ' + failedLabels.join(', ');
+
+    el.prepend(row);
+    while (el.children.length > 200) el.removeChild(el.lastChild);
+  }
+
+  function connectSse() {
+    const dot = document.getElementById('livedot');
+    const es = new EventSource('/api/events');
+    es.onopen = () => { dot.className = 'livedot on'; };
+    es.onerror = () => { dot.className = 'livedot off'; };  // EventSource auto-reconnects
+    es.onmessage = (m) => { try { addLog(JSON.parse(m.data)); } catch (_) {} };
+  }
+  connectSse();
+
+  // ── Journal technique (logs moteur, repliable) ───────────────────────────────
+  (function () {
+    const h = document.getElementById('tech-h');
+    const panel = document.getElementById('tech');
+    const copyBtn = document.getElementById('tech-copy');
+    let open = false, timer = null, lastText = '';
+    function render(lines) {
+      if (!lines || !lines.length) { panel.innerHTML = '<div class="log-empty">Aucun log pour l’instant.</div>'; lastText = ''; return; }
+      lastText = lines.join('\n');
+      panel.innerHTML = lines.map(l => {
+        const cls = / ERROR /.test(l) ? 'lv-error' : (/ WARN /.test(l) ? 'lv-warn' : '');
+        return '<div class="' + cls + '">' + esc(l) + '</div>';
+      }).join('');
+      panel.scrollTop = panel.scrollHeight;
+    }
+    async function load() {
+      try {
+        const r = await fetch('/api/logs', { cache: 'no-store' });
+        const d = await r.json().catch(() => ({}));
+        render(d.lines || []);
+      } catch (_) { /* moteur injoignable — on garde l'affichage courant */ }
+    }
+    function setOpen(v) {
+      open = v;
+      panel.style.display = v ? 'block' : 'none';
+      copyBtn.style.display = v ? 'inline-block' : 'none';
+      h.classList.toggle('open', v);
+      if (v) { load(); timer = setInterval(load, 3000); }
+      else if (timer) { clearInterval(timer); timer = null; }
+    }
+    h.onclick = (e) => { if (e.target === copyBtn) return; setOpen(!open); };
+    copyBtn.onclick = async (e) => {
+      e.stopPropagation();
+      try { await navigator.clipboard.writeText(lastText); copyBtn.textContent = '✓ Copié'; setTimeout(() => { copyBtn.textContent = 'Copier'; }, 1600); }
+      catch (_) { showToast('Copie impossible'); }
+    };
+  })();
+
+  // ── Bandeau de mise à jour (Electron seulement) ──────────────────────────────
+  // window.electronUpdate est injecté par le preload de l'app ; absent dans un navigateur
+  // classique → le bandeau ne s'affiche que dans l'app. Le process principal pousse l'état
+  // (téléchargement → prête) et le bouton déclenche l'installation + le redémarrage.
+  if (window.electronUpdate && typeof window.electronUpdate.onStatus === 'function') {
+    const uel = document.getElementById('update-banner');
+    window.electronUpdate.onStatus((st) => {
+      if (!uel) return;
+      if (!st || st.state === 'none') { uel.style.display = 'none'; return; }
+      const v = st.version ? ' v' + st.version : '';
+      uel.classList.toggle('upd-err', st.state === 'error');
+      if (st.state === 'error') {
+        uel.style.display = 'flex';
+        uel.innerHTML = '<span class="upd-txt">⚠ Échec de la mise à jour' + esc(v) + ' <span class="upd-sub">— ' + esc(st.message || 'erreur inconnue') + '</span></span><button id="upd-btn">Réessayer</button>';
+        const rb = document.getElementById('upd-btn');
+        if (rb) rb.onclick = () => { rb.disabled = true; rb.textContent = 'Réessai…'; window.electronUpdate.install(); };
+      } else if (st.state === 'available' || st.state === 'downloading') {
+        const pct = (st.percent != null && st.percent > 0) ? ' · ' + st.percent + '%' : '';
+        uel.style.display = 'flex';
+        uel.innerHTML = '<span class="upd-txt">⬇ Mise à jour' + esc(v) + ' en téléchargement…<span class="upd-sub">' + pct + '</span></span>';
+      } else if (st.state === 'ready') {
+        uel.style.display = 'flex';
+        uel.innerHTML = '<span class="upd-txt">✨ Mise à jour' + esc(v) + ' prête <span class="upd-sub">— installe-la quand tu veux</span></span><button id="upd-btn">Installer et redémarrer</button>';
+        const b = document.getElementById('upd-btn');
+        if (b) b.onclick = () => { b.disabled = true; b.textContent = 'Redémarrage…'; window.electronUpdate.install(); };
+      } else {
+        uel.style.display = 'none';
+      }
+    });
+  }
+</script>
+</body>
+</html>

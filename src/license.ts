@@ -79,7 +79,7 @@ export class LicenseGate {
   }
 
   get graceActive(): boolean {
-    return !this.state.reachable && this.licensed;
+    return !this.bypass && !this.state.reachable && this.licensed;
   }
 
   async start(key?: string): Promise<void> {

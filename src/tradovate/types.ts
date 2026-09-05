@@ -46,6 +46,10 @@ export interface Order {
   action: OrderAction;
   ordStatus: string; // PendingNew | Working | Completed | Canceled | Rejected | Expired | Filled ...
   admin?: boolean;
+  /** Id de l'ordre jumeau d'une paire OCO (l'un annule l'autre). */
+  ocoId?: number;
+  parentId?: number;
+  linkedId?: number;
 }
 
 export interface OrderVersion {
@@ -80,6 +84,17 @@ export interface Position {
 export interface Contract {
   id: number;
   name: string;
+  contractMaturityId?: number;
+  status?: string;
+}
+
+/** Product = famille de contrats (MNQ, MES, ES…) : taille de tick et valeur du point. */
+export interface ProductInfo {
+  id: number;
+  name: string;
+  tickSize: number;
+  valuePerPoint: number;
+  description?: string;
 }
 
 /** A property/entity event pushed over the websocket after user/syncrequest. */

@@ -1,7 +1,7 @@
 {
   "name": "tradovate-copier",
-  "version": "0.4.7",
-  "description": "Near-instant order-replication trade copier for Tradovate (Mac-friendly, no NinjaTrader needed).",
+  "version": "0.5.0",
+  "description": "Panneau d'ordre multi-comptes Tradovate : chaque ordre part sur tous les comptes en même temps (plus de maître/followers).",
   "author": "Let-Trade Journal",
   "type": "module",
   "main": "electron/main.cjs",

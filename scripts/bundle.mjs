@@ -31,5 +31,6 @@ await build({
 });
 
 copyFileSync("src/dashboard.html", "build/dashboard.html");
+copyFileSync("src/dashboard-mirror.html", "build/dashboard-mirror.html");
 copyFileSync("src/onboarding.html", "build/onboarding.html");
-console.log("✓ bundled → build/copier.mjs (+ dashboard.html, onboarding.html)");
+console.log("✓ bundled → build/copier.mjs (+ dashboard.html, dashboard-mirror.html, onboarding.html)");
