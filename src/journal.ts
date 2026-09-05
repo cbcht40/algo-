@@ -130,7 +130,8 @@ export class JournalLink {
       const r = await fetch(`${this.baseUrl}/api/copier-score`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: this.key, entry: req }),
+        // Fuseau de la machine du trader (le journal n'a pas cette info en base).
+        body: JSON.stringify({ key: this.key, entry: req, utcOffset: -new Date().getTimezoneOffset() / 60 }),
         signal: AbortSignal.timeout(40_000),
       });
       const d = (await r.json().catch(() => ({}))) as Record<string, any>;
