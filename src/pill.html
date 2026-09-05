@@ -8,6 +8,7 @@
   :root { --txt:#f0f0f6; --txt2:#9a9ab4; --txt3:#5e5e78; --border:rgba(255,255,255,.1); --border2:rgba(255,255,255,.18); --accent:#635bff; --accent2:#4f7cff; --red:#f26e8a; --amber:#fbbf24;
     --mono:'Geist Mono',ui-monospace,Menlo,monospace; --display:'Space Grotesk',-apple-system,sans-serif; --sans:'Geist','Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
   * { box-sizing:border-box; margin:0; padding:0; }
+  [hidden] { display:none !important; }
   html, body { background:transparent; height:100%; overflow:hidden; font-family:var(--sans); color:var(--txt); -webkit-font-smoothing:antialiased; }
   body { padding:8px; }
   .pill { display:flex; align-items:center; gap:10px; padding:7px 12px 7px 7px; border-radius:999px; background:rgba(20,20,31,.96); border:1px solid var(--border2); box-shadow:0 12px 40px rgba(0,0,0,.55), 0 0 0 1px rgba(124,116,255,.15); cursor:pointer; -webkit-app-region:no-drag; animation:pop .5s cubic-bezier(.2,1.4,.4,1); }
@@ -118,9 +119,10 @@
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideAll(); });
   api.onOpen(() => { if (last) openReport(last); });
 
+  console.log('pill.html chargée · electronPill =', !!window.electronPill);
   async function poll() {
     let s;
-    try { s = (await (await fetch('/api/state', { cache: 'no-store' })).json()).journal; } catch (_) { return; }
+    try { s = (await (await fetch('/api/state', { cache: 'no-store' })).json()).journal; } catch (err) { console.log('poll KO', String(err)); return; }
     if (!s || !s.enabled) return;
     if (s.scoring && !wasScoring && !expanded) showPill(null, true);
     wasScoring = !!s.scoring;
@@ -129,6 +131,7 @@
     if (lastTs === null) { lastTs = sc.ts; last = sc; if (Date.now() - sc.ts < 120000) showPill(sc); else if (!s.scoring) { document.getElementById('pill').hidden = true; } return; }
     if (sc.ts !== lastTs) {
       lastTs = sc.ts; last = sc;
+      console.log('nouvel avis', sc.score, sc.verdict);
       showPill(sc);
       const e = sc.entry || {};
       if (!sc.error) api.notify(`Avis IA ${sc.score} % — ${e.action === 'Sell' ? 'vente' : 'achat'} ${e.symbol || ''}`, sc.headline || '');

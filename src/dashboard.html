@@ -1157,6 +1157,9 @@
   let pillScore = null, pillTimer = null;
   function showPill(sc, wait) {
     const el = $('aiPill');
+    // Dans l'app Electron, la pastille est une mini-fenêtre flottante séparée (toujours au
+    // premier plan) : la version interne ne sert que dans un navigateur classique.
+    if (window.electronPill) { el.hidden = true; return; }
     pillScore = sc || null;
     clearTimeout(pillTimer);
     if (wait) {

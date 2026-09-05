@@ -201,17 +201,23 @@ function createPill() {
     backgroundColor: '#00000000', title: 'Avis IA',
     webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'preload.cjs') },
   })
-  pill.setAlwaysOnTop(true, 'floating')
+  pill.setAlwaysOnTop(true, 'screen-saver')
   try { pill.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }) } catch (_) { /* plateforme */ }
   placePill(360, 78)
   pill.loadURL(`${DASH_URL}/pill`)
   pill.on('closed', () => { pill = null })
+  // Diagnostic dans le log : la page de la pastille n'a pas de console visible.
+  pill.webContents.on('console-message', (_e, _level, message) => console.log('[pill:page]', String(message).slice(0, 200)))
+  pill.webContents.on('did-fail-load', (_e, code, desc) => console.warn('[pill] chargement échoué', code, desc))
+  pill.webContents.on('did-finish-load', () => console.log('[pill] page chargée', JSON.stringify(pill.getBounds())))
+  console.log('[pill] fenêtre créée', JSON.stringify(pill.getBounds()), 'écran', JSON.stringify(screen.getPrimaryDisplay().workArea))
 }
 ipcMain.on('pill:show', (_e, focus) => {
-  if (!pill || pill.isDestroyed()) return
-  // Si le Copieur est déjà au premier plan, sa propre pastille suffit — sauf demande explicite (rapport).
-  if (!focus && win && !win.isDestroyed() && win.isFocused()) return
+  if (!pill || pill.isDestroyed()) { console.warn('[pill] show demandé mais fenêtre absente'); return }
+  // Toujours montrée (la pastille interne du dashboard est désactivée dans l'app) : pas de
+  // condition sur le focus, qui rendait l'affichage aléatoire selon la fenêtre active.
   if (focus) pill.show(); else pill.showInactive()
+  console.log('[pill] show', focus ? '(focus)' : '(inactif)', 'visible=', pill.isVisible(), 'bounds=', JSON.stringify(pill.getBounds()))
 })
 ipcMain.on('pill:hide', () => { if (pill && !pill.isDestroyed()) pill.hide() })
 ipcMain.on('pill:resize', (_e, { w, h }) => placePill(w, h))
