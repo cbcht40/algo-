@@ -2,31 +2,53 @@
   "manifest_version": 3,
   "name": "Let Trade Copieur — Connecteur",
   "version": "1.2.0",
-  "description": "Capte ta session Tradovate et relaie tes ordres au copieur local à l'instant où ils partent — les autres comptes suivent en même temps. Rien ne quitte ta machine.",
-  "permissions": ["webRequest", "storage", "alarms"],
+  "description": "Relie ta session Tradovate au copieur local et relaie tes ordres à l’instant où ils partent. Rien ne quitte ta machine.",
+  "permissions": [
+    "webRequest",
+    "storage",
+    "alarms"
+  ],
   "host_permissions": [
     "https://*.tradovateapi.com/*",
     "https://*.tradovate.com/*",
     "http://127.0.0.1/*"
   ],
-  "background": { "service_worker": "background.js" },
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
-      "matches": ["https://*.tradovate.com/*"],
-      "js": ["inject.js"],
+      "matches": [
+        "https://*.tradovate.com/*"
+      ],
+      "js": [
+        "inject.js"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "matches": ["https://*.tradovate.com/*"],
-      "js": ["relay.js"],
+      "matches": [
+        "https://*.tradovate.com/*"
+      ],
+      "js": [
+        "relay.js"
+      ],
       "run_at": "document_start"
     }
   ],
   "action": {
     "default_title": "Let Trade Copieur",
     "default_popup": "popup.html",
-    "default_icon": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" }
+    "default_icon": {
+      "16": "icons/16.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
   },
-  "icons": { "16": "icons/16.png", "48": "icons/48.png", "128": "icons/128.png" }
+  "icons": {
+    "16": "icons/16.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  }
 }
