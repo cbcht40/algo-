@@ -214,6 +214,12 @@
   @keyframes spin { to { transform:rotate(360deg); } }
   .empty { color:var(--txt3); font-family:var(--mono); font-size:12.5px; padding:16px; text-align:center; border:1px dashed var(--border); border-radius:10px; margin:0 12px 12px; }
   .masked { padding:0 12px 12px; }
+  .masked .mh { display:flex; align-items:center; gap:8px; width:100%; background:none; border:none; border-top:1px solid var(--border); color:var(--txt3); font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; padding:10px 4px 6px; cursor:pointer; text-align:left; }
+  .masked .mh:hover { color:var(--txt2); }
+  .masked .mh .car { transition:transform .15s; width:14px; height:14px; }
+  .masked .mh.open .car { transform:rotate(90deg); }
+  .masked .mh .sp { flex:1; }
+  .masked .mh .lk { letter-spacing:0; text-transform:none; font-weight:600; color:var(--accent2); }
   .masked .hint { color:var(--txt3); font-size:12px; margin:2px 0 8px; }
   .masked .row { display:flex; align-items:center; gap:10px; padding:8px 12px; font-family:var(--mono); font-size:12px; color:var(--txt2); }
 
@@ -306,6 +312,7 @@
   <symbol id="i-zap" viewBox="0 0 24 24"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z"/></symbol>
   <symbol id="i-layers" viewBox="0 0 24 24"><path d="m12 2 10 5-10 5L2 7l10-5z"/><path d="m2 12 10 5 10-5"/><path d="m2 17 10 5 10-5"/></symbol>
   <symbol id="i-undo" viewBox="0 0 24 24"><path d="M3 7v6h6"/><path d="M21 17a9 9 0 0 0-15-6.7L3 13"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
 </svg>
 
 <div class="app">
@@ -483,7 +490,8 @@
   const shortName = (s) => { s = String(s || ''); return s.length > 12 ? s.slice(0, 5) + '…' + s.slice(-4) : s; };
 
   // ── réglages du panneau (persistés localement) ─────────────────────────────
-  const DEF = { sym: '', qty: 1, type: 'Market', tif: 'Day', brk: true, stopTicks: 20, targetTicks: 40, confirm: true, recents: [] };
+  const DEF = { sym: '', qty: 1, type: 'Market', tif: 'Day', brk: true, stopTicks: 20, targetTicks: 40, confirm: true, recents: [], showMasked: false };
+  window.toggleMasked = () => { S.showMasked = !S.showMasked; saveS(); if (lastState) render(lastState); };
   let S = { ...DEF };
   try { S = { ...DEF, ...(JSON.parse(localStorage.getItem('ltc.ticket') || '{}')) }; } catch (_) {}
   function saveS() { try { localStorage.setItem('ltc.ticket', JSON.stringify(S)); } catch (_) {} }
@@ -932,7 +940,13 @@
     $('accounts').innerHTML = s.accounts.length ? s.accounts.map(acctRow).join('') : '<div class="empty">Aucun compte. Ouvre ta session Tradovate (extension active) puis clique « Comptes ».</div>';
     if (edit) { const el = document.querySelector(`.mult input[data-spec="${edit.spec.replace(/"/g, '\\"')}"]`); if (el) { el.value = edit.val; el.focus(); } }
     const masked = s.removedSpecs || [];
-    $('masked').innerHTML = masked.length ? `<div class="hint">Comptes masqués (${masked.length}) — « Comptes » les ignore. Réaffiche-les pour les retrouver au prochain scan.</div>` + masked.map(m => `<div class="row"><span>${esc(m)}</span><span class="sp" style="flex:1"></span><button class="btn sm" onclick="restoreOne('${esc(m)}')">${ico('undo')}Réafficher</button></div>`).join('') : '';
+    $('masked').innerHTML = masked.length
+      ? `<button class="mh ${S.showMasked ? 'open' : ''}" onclick="toggleMasked()" title="${S.showMasked ? 'Replier' : 'Afficher'} les comptes retirés du copieur"><svg class="i car"><use href="#i-chev"/></svg>Comptes masqués (${masked.length})<span class="sp"></span><span class="lk">${S.showMasked ? 'masquer' : 'afficher'}</span></button>`
+        + (S.showMasked
+          ? `<div class="hint">Retirés du copieur : « Comptes » les ignore. Réaffiche-les pour les retrouver au prochain scan.</div>`
+            + masked.map(m => `<div class="row"><span>${esc(m)}</span><span class="sp" style="flex:1"></span><button class="btn sm" onclick="restoreOne('${esc(m)}')">${ico('undo')}Réafficher</button></div>`).join('')
+          : '')
+      : '';
     // protections
     const ex = s.exits || [];
     $('exitCount').textContent = ex.length ? `${ex.reduce((n, g) => n + g.count, 0) } ordre(s)` : '';
