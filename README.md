@@ -60,13 +60,31 @@ Le relais ne voit que le **navigateur** (pas l'app mobile / desktop Tradovate).
 protections en place, **× multiplicateur**, quantité résultante, et par compte : mettre à plat,
 annuler ses ordres, actualiser, retirer. Glisser pour réordonner.
 
-**Stops & objectifs du groupe** : une ligne par (instrument, stop/objectif). Nouveau prix +
-**Appliquer à tous** → `order/modifyorder` sur chaque compte en parallèle. Boutons ±1/±4 ticks.
+**Prix en direct** : le panneau affiche dernier / bid / ask / haut / bas de l'instrument
+(flux de marché Tradovate, token de ta session) ; en Limite/Stop, un clic sur « bid »,
+« dernier » ou « ask » remplit le prix. Chaque position montre son **P&L latent**, et
+l'en-tête des comptes le P&L latent du groupe.
+
+**Stops & objectifs du groupe** : une ligne par (instrument, stop/objectif), trois commandes :
+- **Breakeven** (stops) : chaque stop revient au prix d'entrée de **son** compte (fill
+  mémorisé, sinon prix moyen de la position), + N ticks dans le sens favorable.
+- **Décaler** ±1/±4 ticks : chaque ordre bouge par rapport à **son** prix (les écarts entre
+  comptes sont conservés).
+- **Prix commun** + **Appliquer** : le même prix sur tous les comptes.
 
 **Journal des ordres** : chaque action de groupe avec le détail par compte (clic sur la ligne).
 
 ## 2. Sécurités
 
+- **Incidents** : toute action qui échoue sur un compte (ordre refusé, socket fermé, SL/TP
+  non posé…) devient un incident visible en haut du tableau de bord (bandeau rouge + bip),
+  avec « Réessayer » / « Ignorer ». Un échec **réseau** est **relancé automatiquement** dès
+  que le compte revient (fenêtre 90 s, 2 tentatives max) ; un refus Tradovate (limite de
+  risque…) reste manuel. Un incident « critique » = position sans protection ou non clôturée.
+- **Pont local verrouillé** : seules les pages `*.tradovate.com` (content script) et
+  l'extension peuvent parler au pont `127.0.0.1:7878`, et tout POST exige la **clé
+  d'appairage** (`.copier-bridge.json`, remise à l'extension via `GET /pair`). Une page web
+  quelconque reçoit 403.
 - **Contrôle de synchronisation** (toutes les 3 s) : position ÷ multiplicateur doit être
   identique sur tous les comptes cochés. Un écart persistant > 6 s est signalé (bandeau + ligne
   rouge) — jamais corrigé automatiquement.

@@ -324,6 +324,12 @@ export class TradovateClient {
     return this.token?.accessToken ?? this.opts.accessToken ?? "";
   }
 
+  /** Token pour le flux de marché (mdAccessToken si fourni, sinon le token de session —
+   *  les deux sont acceptés par md.tradovateapi.com). */
+  get mdToken(): string | undefined {
+    return this.token?.mdAccessToken || this.token?.accessToken || undefined;
+  }
+
   /** Re-fetch the account list (to pick up newly-opened accounts) WITHOUT replaying
    *  the order/position snapshot (which would re-process old orders). */
   async reSyncAccounts(): Promise<Account[]> {

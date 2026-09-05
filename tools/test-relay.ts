@@ -43,6 +43,9 @@ function fakeClient(spec: string, calls: Call[], opts: { orders?: Record<number,
   let next = 1000;
   return {
     isReady: true,
+    accounts: [] as any[],
+    onEntity: () => undefined,
+    onStatus: () => undefined,
     request: async (endpoint: string, body: any) => {
       calls.push({ spec, endpoint, body });
       const d: any = { orderId: ++next };
@@ -184,6 +187,94 @@ await t("liquidateposition relayée sur les comptes en position", async () => {
   assert.deepEqual(calls.map((c) => [c.spec, c.endpoint, c.body.contractId]), [["B", "order/liquidateposition", 42]]);
   const ev = events.at(-1)!;
   assert.equal(ev.kind, "flatten"); assert.equal(ev.ok, 1); assert.equal(ev.skipped, 1);
+});
+
+// --- incidents : échec → incident → relance (auto à la reconnexion / manuelle) -----------
+function flakyClient(spec: string, calls: Call[], failTimes: number) {
+  let fails = failTimes;
+  let next = 5000;
+  const c: any = fakeClient(spec, calls);
+  c.isReady = true;
+  c.request = async (endpoint: string, body: any) => {
+    calls.push({ spec, endpoint, body });
+    if (fails > 0) { fails--; throw new Error("socket closed"); }
+    return { s: 200, d: { orderId: ++next } };
+  };
+  return c;
+}
+await t("incident : échec réseau → incident auto, relance manuelle réussie", async () => {
+  const calls: Call[] = [];
+  const b = flakyClient("B", calls, 1);
+  const { e, events } = engineWith([
+    { spec: "A", mult: 1, id: 1, client: fakeClient("A", calls) },
+    { spec: "B", mult: 1, id: 2, client: b },
+  ]);
+  const r = await e.relay({ kind: "request", teeId: "i1", endpoint: "order/placeorder", body: { accountId: 1, accountSpec: "A", action: "Buy", symbol: "MNQZ6", orderQty: 1, orderType: "Market" } });
+  assert.equal(r.ok, false);
+  const st = e.dashboardState();
+  assert.equal(st.incidents.length, 1);
+  const inc = st.incidents[0]!;
+  assert.equal(inc.kind, "entry"); assert.equal(inc.label, "B"); assert.equal(inc.auto, true); assert.equal(inc.status, "open");
+  assert.match(inc.error, /socket closed/);
+  const rr = await e.retryIncident(inc.id);
+  assert.equal(rr.ok, true);
+  assert.equal(e.dashboardState().incidents[0]!.status, "resolved");
+  assert.equal(calls.filter((c) => c.spec === "B").length, 2);
+  assert.equal(events.at(-1)!.kind, "retry"); assert.equal(events.at(-1)!.ok, 1);
+});
+await t("incident : refus Tradovate → pas de relance auto ; ignorer", async () => {
+  const calls: Call[] = [];
+  const b: any = fakeClient("B", calls);
+  b.request = async (endpoint: string, body: any) => { calls.push({ spec: "B", endpoint, body }); return { s: 200, d: { failureReason: "RiskLimit", failureText: "Max position exceeded" } }; };
+  const { e } = engineWith([
+    { spec: "A", mult: 1, id: 1, client: fakeClient("A", calls) },
+    { spec: "B", mult: 1, id: 2, client: b },
+  ]);
+  await e.placeGroupOrder({ symbol: "MNQZ6", action: "Buy", qty: 1, orderType: "Market" });
+  const inc = e.dashboardState().incidents[0]!;
+  assert.equal(inc.auto, false); assert.match(inc.error, /Max position/);
+  assert.equal(e.ignoreIncident(inc.id).ok, true);
+  assert.equal(e.dashboardState().incidents[0]!.status, "ignored");
+});
+await t("incident : relance automatique quand le login revient", async () => {
+  const calls: Call[] = [];
+  const b = flakyClient("B", calls, 1);
+  const { e, events } = engineWith([
+    { spec: "A", mult: 1, id: 1, client: fakeClient("A", calls) },
+    { spec: "B", mult: 1, id: 2, client: b },
+  ]);
+  await e.placeGroupOrder({ symbol: "MNQZ6", action: "Sell", qty: 2, orderType: "Market" });
+  assert.equal(e.dashboardState().incidents[0]!.status, "open");
+  (e as any).onLoginReady(b); // le login de B redevient prêt
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(e.dashboardState().incidents[0]!.status, "resolved");
+  assert.match(events.at(-1)!.note ?? "", /relance auto/);
+});
+
+// --- breakeven / décalage groupés --------------------------------------------------------
+await t("breakeven : chaque stop revient au fill de SON compte (+offset), décalage relatif", async () => {
+  const calls: Call[] = [];
+  const A = fakeClient("A", calls), B = fakeClient("B", calls);
+  const { e } = engineWith([
+    { spec: "A", mult: 1, id: 1, client: A },
+    { spec: "B", mult: 1, id: 2, client: B },
+  ]);
+  (e as any).instruments.set("MNQZ6", { symbol: "MNQZ6", contractId: 42, root: "MNQ", productName: "MNQ", tickSize: 0.25, valuePerPoint: 2, tickValue: 0.5, fetchedAt: Date.now() });
+  const acc = (e as any).accounts;
+  (e as any).registerExit({ orderId: 11, account: acc[0], contractId: 42, symbol: "MNQZ6", role: "stop", action: "Sell", price: 20990, qty: 1, groupId: "g", fillPrice: 21000 });
+  (e as any).registerExit({ orderId: 12, account: acc[1], contractId: 42, symbol: "MNQZ6", role: "stop", action: "Sell", price: 20990.5, qty: 1, groupId: "g", fillPrice: 21000.5 });
+  const be = await e.breakevenExits("MNQZ6|stop|Sell", 2);
+  assert.equal(be.ok, true); assert.equal(be.modified, 2);
+  assert.deepEqual(calls.map((c) => [c.spec, c.body.orderId, c.body.stopPrice]), [["A", 11, 21000.5], ["B", 12, 21001]]);
+  calls.length = 0;
+  const sh = await e.shiftExits("MNQZ6|stop|Sell", -4);
+  assert.equal(sh.modified, 2);
+  assert.deepEqual(calls.map((c) => [c.spec, c.body.stopPrice]), [["A", 20999.5], ["B", 21000]]);
+  // short : stop Buy → BE en dessous de l'entrée avec offset
+  calls.length = 0;
+  (e as any).registerExit({ orderId: 21, account: acc[0], contractId: 42, symbol: "MNQZ6", role: "stop", action: "Buy", price: 21010, qty: 1, groupId: "g2", fillPrice: 21000 });
+  await e.breakevenExits("MNQZ6|stop|Buy", 4);
+  assert.deepEqual(calls.map((c) => [c.spec, c.body.stopPrice]), [["A", 20999]]);
 });
 
 console.log(`\n${n} tests OK`);

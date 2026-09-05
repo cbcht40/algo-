@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { logger } from "./logger";
+import { bridgeKey, corsHeaders, pairAllowed, postAllowed } from "./bridgeAuth";
 import { verifyLicense } from "./license";
 import { TradovateClient } from "./tradovate/client";
 import { jwtClaims } from "./tradovate/tokenStore";
@@ -88,26 +89,31 @@ export function startSetup(opts: SetupOptions): void {
 
   // --- bridge (7878): the Let Trade Copieur extension pushes session tokens here ---
   const bridge = createServer((req, res) => {
-    res.setHeader("Access-Control-Allow-Origin", "*");
-    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    for (const [k, v] of Object.entries(corsHeaders(req))) res.setHeader(k, v);
     if (req.method === "OPTIONS") return void res.writeHead(204).end();
+    if (req.method === "GET" && req.url?.startsWith("/pair")) {
+      res.writeHead(pairAllowed(req) ? 200 : 403, { "Content-Type": "application/json" });
+      return void res.end(JSON.stringify(pairAllowed(req) ? { ok: true, key: bridgeKey() } : { ok: false }));
+    }
     if (req.method === "GET" && req.url?.startsWith("/status")) {
-      res.writeHead(200, { "Content-Type": "application/json" });
-      return void res.end(JSON.stringify({ running: true, setup: true, logins: logins.size }));
+      res.writeHead(pairAllowed(req) ? 200 : 403, { "Content-Type": "application/json" });
+      return void res.end(JSON.stringify(pairAllowed(req) ? { running: true, setup: true, logins: logins.size } : { ok: false }));
     }
     if (req.method === "POST" && req.url?.startsWith("/token")) {
       let body = "";
       req.on("data", (c) => (body += c));
       req.on("end", () => {
-        try {
-          const token = String(JSON.parse(body || "{}").token ?? "");
-          if (token) {
-            tokenSeen = true;
-            void discover(token);
-          }
-        } catch {
-          /* ignore */
+        let p: Record<string, any> = {};
+        try { p = JSON.parse(body || "{}") ?? {}; } catch { /* ignore */ }
+        const auth = postAllowed(req, p.key);
+        if (!auth.ok) {
+          res.writeHead(403, { "Content-Type": "application/json" });
+          return void res.end(JSON.stringify({ ok: false, error: "unauthorized", why: auth.why }));
+        }
+        const token = String(p.token ?? "");
+        if (token) {
+          tokenSeen = true;
+          void discover(token);
         }
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(JSON.stringify({ ok: true }));

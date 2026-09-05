@@ -1,6 +1,8 @@
 // Let Trade Copieur background service worker.
-// Sniffs the Authorization: Bearer token from your live Tradovate requests and
-// forwards it to the local copier bridge. Nothing leaves your machine.
+// 1) Sniffs the Authorization: Bearer token from your live Tradovate requests and forwards
+//    it to the local copier bridge. 2) Pairs with the bridge (shared key) so that only this
+//    extension — never a random web page — can talk to it. 3) Fallback path for relayed
+//    orders when the content script cannot reach the bridge directly. Nothing leaves your machine.
 
 const COPIER = "http://127.0.0.1:7878";
 
@@ -8,6 +10,8 @@ const COPIER = "http://127.0.0.1:7878";
 // non-secret display info does), so an unloaded worker simply re-learns them
 // from the next Tradovate request.
 const tokens = {};
+let bridgeKey = "";
+let pairing = null;
 
 function decode(jwt) {
   try {
@@ -19,6 +23,41 @@ function decode(jwt) {
   }
 }
 
+// --- appairage avec le pont (clé partagée) ------------------------------------------
+async function loadKey() {
+  if (bridgeKey) return bridgeKey;
+  try { bridgeKey = (await chrome.storage.local.get("bridgeKey")).bridgeKey || ""; } catch {}
+  return bridgeKey;
+}
+async function pair() {
+  if (pairing) return pairing;
+  pairing = (async () => {
+    try {
+      const r = await fetch(`${COPIER}/pair`, { cache: "no-store" });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.key) {
+        bridgeKey = j.key;
+        await chrome.storage.local.set({ bridgeKey: j.key, pairedAt: Date.now() });
+        return j.key;
+      }
+    } catch {}
+    return "";
+  })();
+  const k = await pairing;
+  pairing = null;
+  return k;
+}
+/** POST JSON au pont avec la clé ; sur 403 on ré-appaire une fois et on réessaie. */
+async function postBridge(path, payload) {
+  let key = (await loadKey()) || (await pair());
+  let r = await fetch(`${COPIER}${path}`, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify({ ...payload, key }), keepalive: true });
+  if (r.status === 403) {
+    key = await pair();
+    if (key) r = await fetch(`${COPIER}${path}`, { method: "POST", headers: { "Content-Type": "text/plain" }, body: JSON.stringify({ ...payload, key }), keepalive: true });
+  }
+  return r;
+}
+
 async function getDisplay() {
   return (await chrome.storage.local.get("logins")).logins || {};
 }
@@ -28,7 +67,7 @@ async function setDisplay(logins) {
   const subs = Object.keys(logins);
   const anyOk = subs.some((s) => logins[s].sentOk);
   chrome.action.setBadgeText({ text: subs.length ? String(subs.length) : "" });
-  chrome.action.setBadgeBackgroundColor({ color: anyOk ? "#16a34a" : "#9ca3af" });
+  chrome.action.setBadgeBackgroundColor({ color: anyOk ? "#4f7cff" : "#9ca3af" });
 }
 
 async function send(sub) {
@@ -41,11 +80,7 @@ async function send(sub) {
   info.email = entry.email;
   info.lastSeen = Date.now();
   try {
-    const r = await fetch(`${COPIER}/token`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ token: entry.token }),
-    });
+    const r = await postBridge("/token", { token: entry.token });
     const j = await r.json().catch(() => ({}));
     info.sentOk = !!(r.ok && j.ok);
     info.login = j.login || null;
@@ -86,15 +121,18 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
 );
 
 // 2) Retry every minute: when the copier was offline (just launched, rebooted),
-// re-deliver the latest known tokens automatically.
+// re-deliver the latest known tokens automatically — and (re)pair if needed.
 chrome.alarms.create("retry", { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener(async (a) => {
   if (a.name !== "retry") return;
+  if (!(await loadKey())) await pair();
   const logins = await getDisplay();
   for (const sub of Object.keys(tokens)) {
     if (!logins[sub]?.sentOk) await send(sub);
   }
 });
+chrome.runtime.onInstalled.addListener(() => { pair(); });
+chrome.runtime.onStartup.addListener(() => { pair(); });
 
 // 3) Popup + content-script messages.
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
@@ -106,13 +144,13 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
   // Ordre intercepté dans la page (relais) — chemin de secours quand le content script
   // n'a pas pu joindre le copieur en direct. Réponse immédiate, envoi en fond.
   if (msg && msg.type === "relay" && msg.relay) {
-    fetch(`${COPIER}/relay`, {
-      method: "POST",
-      headers: { "Content-Type": "text/plain" },
-      body: JSON.stringify(msg.relay),
-      keepalive: true,
-    }).catch(() => {});
+    postBridge("/relay", msg.relay).catch(() => {});
     reply({ ok: true });
+    return true;
+  }
+  // Le content script demande la clé d'appairage (pour son chemin direct).
+  if (msg === "key") {
+    (async () => reply({ key: (await loadKey()) || (await pair()) }))();
     return true;
   }
   // Keep-alive : tant qu'un onglet Tradovate est ouvert, le content script nous pingue

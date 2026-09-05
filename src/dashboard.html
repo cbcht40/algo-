@@ -122,6 +122,27 @@
   .inst-info { font-family:var(--mono); font-size:11.5px; color:var(--txt2); margin-top:7px; min-height:16px; display:flex; gap:10px; flex-wrap:wrap; }
   .inst-info b { color:var(--txt); }
   .inst-info.err { color:var(--red); }
+  .live { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-top:8px; font-family:var(--mono); min-height:0; }
+  .live .last { font-size:22px; font-weight:700; letter-spacing:.02em; }
+  .live .last.up { color:var(--accent2); } .live .last.down { color:var(--red); }
+  .live .ba { font-size:11.5px; color:var(--txt2); }
+  .live .ba b { color:var(--txt); font-weight:600; }
+  .live .fill { font-size:10.5px; font-weight:700; padding:3px 8px; border-radius:6px; border:1px solid var(--border); background:var(--card3); color:var(--txt2); cursor:pointer; }
+  .live .fill:hover { color:var(--txt); border-color:var(--border2); }
+  .live .stale { color:var(--txt3); font-size:10.5px; }
+  .pnl { font-family:var(--mono); font-weight:700; }
+  .pnl.up { color:var(--accent2); } .pnl.down { color:var(--red); } .pnl.flat { color:var(--txt3); }
+  .inc { border-color:rgba(242,110,138,.6); background:linear-gradient(180deg,rgba(242,110,138,.16),rgba(242,110,138,.06)); flex-direction:column; align-items:stretch; gap:8px; }
+  .inc .inc-h { display:flex; align-items:center; gap:10px; color:var(--red); font-weight:700; }
+  .inc .inc-h .sp { flex:1; }
+  .inc .inc-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; font-family:var(--mono); font-size:12px; color:var(--txt); padding:7px 10px; border-radius:8px; background:rgba(0,0,0,.28); }
+  .inc .inc-row .err { color:var(--txt2); flex:1; min-width:140px; }
+  .inc .inc-row .crit { color:var(--amber); font-weight:700; }
+  .inc .inc-row .who { font-weight:700; }
+  .inc .inc-row.retrying { opacity:.7; } .inc .inc-row.resolved { opacity:.5; } .inc .inc-row.ignored { opacity:.4; }
+  .exit .grp { display:flex; align-items:center; gap:5px; padding:3px 6px; border-radius:8px; border:1px dashed var(--border); }
+  .exit .grp .gl { font-family:var(--mono); font-size:10px; font-weight:700; letter-spacing:.08em; color:var(--txt3); text-transform:uppercase; margin-right:2px; }
+  .exit .grp input.off { width:44px; font-size:12px; padding:5px 6px; }
   .chips { display:flex; gap:6px; flex-wrap:wrap; margin-top:8px; }
   .chip { font-family:var(--mono); font-size:11px; font-weight:700; padding:4px 9px; border-radius:6px; border:1px solid var(--border); background:var(--card3); color:var(--txt2); cursor:pointer; transition:all .12s; }
   .chip:hover { color:var(--txt); border-color:var(--border2); }
@@ -349,6 +370,7 @@
             <div class="sugg" id="sugg"></div>
           </div>
           <div class="inst-info" id="instInfo"></div>
+          <div class="live" id="live"></div>
           <div class="chips" id="recents"></div>
         </div>
 
@@ -398,6 +420,7 @@
 
         <div class="tk-foot">
           <label class="opt" title="Demande une confirmation avant chaque envoi d'ordre"><input type="checkbox" id="confirm" checked /> Confirmer avant d'envoyer</label>
+          <label class="opt" title="Bip sonore quand une action échoue sur un compte"><input type="checkbox" id="sound" checked /> Son</label>
           <button class="btn sm" id="skipInfo" style="display:none" title="Réaffiche toutes les confirmations que tu as masquées avec « Ne plus afficher ce message »"></button>
           <span class="sp"></span>
           <button class="btn sm" id="cancelAllBtn" title="Annule tous les ordres en attente (entrées, stops, objectifs) sur tous les comptes"><svg class="i"><use href="#i-ban"/></svg>Annuler les ordres</button>
@@ -490,8 +513,26 @@
   const shortName = (s) => { s = String(s || ''); return s.length > 12 ? s.slice(0, 5) + '…' + s.slice(-4) : s; };
 
   // ── réglages du panneau (persistés localement) ─────────────────────────────
-  const DEF = { sym: '', qty: 1, type: 'Market', tif: 'Day', brk: true, stopTicks: 20, targetTicks: 40, confirm: true, recents: [], showMasked: false };
+  const DEF = { sym: '', qty: 1, type: 'Market', tif: 'Day', brk: true, stopTicks: 20, targetTicks: 40, confirm: true, recents: [], showMasked: false, sound: true };
   window.toggleMasked = () => { S.showMasked = !S.showMasked; saveS(); if (lastState) render(lastState); };
+
+  // ── son (bip d'alerte, sans fichier : Web Audio) ─────────────────────────────
+  let audioCtx = null;
+  function beep(kind) {
+    if (!S.sound) return;
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      const seq = kind === 'alert' ? [[880, 0, .12], [660, .16, .12], [880, .32, .18]] : [[1040, 0, .08]];
+      for (const [f, t, d] of seq) {
+        const o = audioCtx.createOscillator(), g = audioCtx.createGain();
+        o.type = 'sine'; o.frequency.value = f; o.connect(g); g.connect(audioCtx.destination);
+        const t0 = audioCtx.currentTime + t;
+        g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.25, t0 + .01); g.gain.exponentialRampToValueAtTime(0.0001, t0 + d);
+        o.start(t0); o.stop(t0 + d + .02);
+      }
+    } catch (_) {}
+  }
+  const fmtPnl = (v) => (v == null ? '' : `<span class="pnl ${v > 0 ? 'up' : v < 0 ? 'down' : 'flat'}">${v > 0 ? '+' : ''}${Number(v).toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} $</span>`);
   let S = { ...DEF };
   try { S = { ...DEF, ...(JSON.parse(localStorage.getItem('ltc.ticket') || '{}')) }; } catch (_) {}
   function saveS() { try { localStorage.setItem('ltc.ticket', JSON.stringify(S)); } catch (_) {} }
@@ -731,7 +772,7 @@
   function posChips(a) {
     if (!a.connected) return '<span class="pchip flat">positions inconnues (déconnecté)</span>';
     const ps = (a.positions || []).filter(p => p.netPos);
-    let h = ps.map(p => { const long = p.netPos > 0; const px = (p.netPrice != null && p.netPrice !== 0) ? ' @' + p.netPrice : ''; return `<span class="pchip ${long ? 'long' : 'short'}">${esc(p.symbol)} ${long ? '+' : ''}${p.netPos}${px}</span>`; }).join('');
+    let h = ps.map(p => { const long = p.netPos > 0; const px = (p.netPrice != null && p.netPrice !== 0) ? ' @' + p.netPrice : ''; return `<span class="pchip ${long ? 'long' : 'short'}">${esc(p.symbol)} ${long ? '+' : ''}${p.netPos}${px}${p.unrealized != null ? ' · ' + fmtPnl(p.unrealized) : ''}</span>`; }).join('');
     if (!ps.length) h += '<span class="pchip flat">à plat</span>';
     if (a.exits) h += `<span class="pchip prot">${a.exits} protection${a.exits > 1 ? 's' : ''}</span>`;
     const other = Math.max(0, (a.workingOrders || 0) - (a.exits || 0));
@@ -856,10 +897,13 @@
         <span class="d">${g.action === 'Sell' ? 'vente' : 'achat'} · ${g.count} compte${g.count > 1 ? 's' : ''}</span>
         <span class="px">${same ? fmtPx(g.minPrice, dec) : fmtPx(g.minPrice, dec) + ' – ' + fmtPx(g.maxPrice, dec)}${same ? '' : '<small>prix différents (fills)</small>'}</span>
         <div class="ctl">
-          ${tick ? `<button class="tick" onclick="nudge('${k}', -4)">−4</button><button class="tick" onclick="nudge('${k}', -1)">−1</button>` : ''}
+          ${g.role === 'stop' ? `<span class="grp" title="Ramène le stop de CHAQUE compte à son propre prix d'entrée (+ décalage en ticks dans le sens favorable)"><span class="gl">BE</span><input type="number" class="off" id="be-${k}" value="0" min="0" step="1" title="décalage en ticks"><button class="btn sm" onclick="beExit('${k}')">Breakeven</button></span>` : ''}
+          <span class="grp" title="Décale l'ordre de CHAQUE compte par rapport à son propre prix (garde les écarts entre comptes)"><span class="gl">décaler</span><button class="tick" onclick="shiftExit('${k}', -4)">−4</button><button class="tick" onclick="shiftExit('${k}', -1)">−1</button><button class="tick" onclick="shiftExit('${k}', 1)">+1</button><button class="tick" onclick="shiftExit('${k}', 4)">+4</button></span>
+          <span class="grp" title="Met le MÊME prix sur tous les comptes"><span class="gl">prix commun</span>
+          ${tick ? `<button class="tick" onclick="nudge('${k}', -1)">−1</button>` : ''}
           <input type="number" id="px-${k}" value="${ref}" step="${tick || 0.01}" title="Nouveau prix pour TOUS les comptes">
-          ${tick ? `<button class="tick" onclick="nudge('${k}', 1)">+1</button><button class="tick" onclick="nudge('${k}', 4)">+4</button>` : ''}
-          <button class="btn sm primary" onclick="applyExit('${k}')">Appliquer à tous</button>
+          ${tick ? `<button class="tick" onclick="nudge('${k}', 1)">+1</button>` : ''}
+          <button class="btn sm primary" onclick="applyExit('${k}')">Appliquer</button></span>
           <button class="btn sm danger" onclick="cancelExit('${k}')" title="Annule ces ordres sur tous les comptes (les positions restent ouvertes)">Annuler</button>
         </div>
         <details><summary>détail par compte</summary>${g.accounts.map(a => `<div>${esc(a.label)} · ${a.qty} @ ${fmtPx(a.price, dec)}</div>`).join('')}</details>
@@ -877,6 +921,17 @@
     catch (_) { showToast('Serveur injoignable'); }
     refresh();
   };
+  window.beExit = async (key) => {
+    const el = document.getElementById('be-' + key); const off = Math.max(0, Math.floor(Number(el && el.value) || 0));
+    try { const d = await post('/api/exits/breakeven', { key, offsetTicks: off }); showToast(d.ok ? `✓ ${d.modified} stop(s) à breakeven${off ? ' +' + off + ' tick' : ''}` + (d.skipped && d.skipped.length ? ` · ${d.skipped.length} sans prix d'entrée` : '') : `⚠ ${d.modified || 0} déplacé(s) · ${(d.errors || []).join(' ; ')}`); }
+    catch (_) { showToast('Serveur injoignable'); }
+    refresh();
+  };
+  window.shiftExit = async (key, ticks) => {
+    try { const d = await post('/api/exits/shift', { key, ticks }); showToast(d.ok ? `✓ ${d.modified} ordre(s) décalé(s) de ${ticks > 0 ? '+' : ''}${ticks} tick(s)` : `⚠ ${(d.errors || []).join(' ; ')}`); }
+    catch (_) { showToast('Serveur injoignable'); }
+    refresh();
+  };
   window.cancelExit = async (key) => {
     if (!(await confirmBox({ key: 'cancelExit', title: 'Annuler ces ordres sur tous les comptes ?', body: 'Les positions resteront ouvertes SANS cette protection.', ok: 'Annuler les ordres', danger: true }))) return;
     try { const d = await post('/api/exits/cancel', { key }); showToast(d.ok ? `✓ ${d.canceled} ordre(s) annulé(s)` : `⚠ ${(d.errors || []).join(' ; ')}`); }
@@ -885,8 +940,36 @@
   };
 
   // ── rendu global ─────────────────────────────────────────────────────────────
+  const seenIncidents = new Set();
+  function incidentsBanner(s) {
+    const list = (s.incidents || []);
+    const open = list.filter(i => i.status === 'open' || i.status === 'retrying');
+    // Bip sur tout nouvel incident ouvert.
+    let fresh = false;
+    for (const i of list) { if (!seenIncidents.has(i.id)) { seenIncidents.add(i.id); if (i.status === 'open') fresh = true; } }
+    if (fresh) beep('alert');
+    if (!list.length) return '';
+    const KIND_I = { entry: 'entrée', bracket: 'SL/TP', modify: 'modification', cancel: 'annulation', flatten: 'mise à plat' };
+    const crit = open.some(i => i.critical);
+    const rows = list.slice(0, 8).map(i => `
+      <div class="inc-row ${i.status}">
+        <span class="who">${esc(i.label)}</span>
+        <span>${KIND_I[i.kind] || i.kind}${i.action ? ' · ' + (i.action === 'Sell' ? 'vente' : 'achat') : ''}${i.qty ? ' × ' + i.qty : ''}${i.symbol ? ' ' + esc(i.symbol) : ''}</span>
+        ${i.critical && i.status === 'open' ? '<span class="crit">position sans protection / non clôturée</span>' : ''}
+        <span class="err">${i.status === 'resolved' ? '✓ relancé avec succès' : i.status === 'ignored' ? 'ignoré' : i.status === 'retrying' ? 'relance en cours…' : esc(i.error)}${i.attempts ? ` · ${i.attempts} tentative${i.attempts > 1 ? 's' : ''}` : ''}${i.auto && i.status === 'open' ? ' · relance auto à la reconnexion' : ''}</span>
+        ${i.status === 'open' ? `<button class="btn sm primary" onclick="retryIncident('${esc(i.id)}')">Réessayer</button><button class="btn sm" onclick="ignoreIncident('${esc(i.id)}')">Ignorer</button>` : ''}
+      </div>`).join('');
+    return `<div class="banner inc">
+      <div class="inc-h">${ico('alert')}<span>${open.length ? `${open.length} action${open.length > 1 ? 's' : ''} non exécutée${open.length > 1 ? 's' : ''}${crit ? ' — vérifie tes positions' : ''}` : 'Incidents récents'}</span><span class="sp"></span>${open.length > 1 ? `<button class="btn sm" onclick="retryAll()">Tout réessayer</button>` : ''}</div>
+      ${rows}</div>`;
+  }
+  window.retryIncident = async (id) => { try { const d = await post('/api/incidents/retry', { id }); showToast(d.ok ? '✓ Relancé avec succès' : 'Échec : ' + (d.error || 'erreur')); } catch (_) { showToast('Serveur injoignable'); } refresh(); };
+  window.ignoreIncident = async (id) => { try { await post('/api/incidents/ignore', { id }); } catch (_) {} refresh(); };
+  window.retryAll = async () => { const open = ((lastState && lastState.incidents) || []).filter(i => i.status === 'open'); for (const i of open) { try { await post('/api/incidents/retry', { id: i.id }); } catch (_) {} } refresh(); };
+
   function banners(s) {
     const out = [];
+    const ib = incidentsBanner(s); if (ib) out.push(ib);
     const lic = s.license;
     if (lic && !(lic.licensed && !lic.graceActive)) {
       if (lic.graceActive) out.push(`<div class="banner warn">${ico('alert')}<span>Vérification de la licence impossible (backend injoignable) — le trading reste actif temporairement (grâce). Reconnecte-toi à internet.</span></div>`);
@@ -936,7 +1019,8 @@
     const inGroup = s.accounts.filter(a => a.enabled).length;
     $('acctCount').textContent = `${inGroup}/${s.accounts.length} dans le groupe`;
     const lots = s.accounts.filter(a => a.enabled && a.connected && a.resolved).reduce((n, a) => n + Math.floor(S.qty * a.multiplier + 1e-9), 0);
-    $('acctSum').textContent = `${lots} lot${lots > 1 ? 's' : ''} pour ${S.qty} de base`;
+    $('acctSum').innerHTML = (s.groupUnrealized != null ? `P&amp;L latent groupe ${fmtPnl(s.groupUnrealized)} · ` : '') + `${lots} lot${lots > 1 ? 's' : ''} pour ${S.qty} de base`;
+    renderLive(s);
     $('accounts').innerHTML = s.accounts.length ? s.accounts.map(acctRow).join('') : '<div class="empty">Aucun compte. Ouvre ta session Tradovate (extension active) puis clique « Comptes ».</div>';
     if (edit) { const el = document.querySelector(`.mult input[data-spec="${edit.spec.replace(/"/g, '\\"')}"]`); if (el) { el.value = edit.val; el.focus(); } }
     const masked = s.removedSpecs || [];
@@ -955,17 +1039,41 @@
     if (focused) { const el = document.getElementById(focused.id); if (el) { el.value = focused.val; el.focus(); } }
     renderRecents(); updateTicket();
   }
+  // Prix en direct de l'instrument du panneau (flux de marché Tradovate).
+  let lastLast = null;
+  function renderLive(s) {
+    const sym = ($('sym').value || '').trim().toUpperCase();
+    const q = sym && s.quotes ? s.quotes[sym] : null;
+    const el = $('live');
+    if (!sym) { el.innerHTML = ''; return; }
+    if (!q || (q.last == null && q.bid == null)) {
+      el.innerHTML = `<span class="stale">${s.marketData && s.marketData.connected ? 'en attente de cotation…' : (s.connected ? 'flux de marché en connexion…' : 'prix indisponible (aucun compte connecté)')}</span>`;
+      return;
+    }
+    const dec = q.decimals != null ? q.decimals : (inst ? decOf(inst.tickSize) : 2);
+    const last = q.last != null ? q.last : (q.bid + q.ask) / 2;
+    const cls = lastLast == null || last === lastLast ? '' : (last > lastLast ? 'up' : 'down');
+    lastLast = last;
+    const age = Date.now() - (q.ts || 0);
+    const fills = S.type !== 'Market'
+      ? `<span class="fill" onclick="fillPrice(${q.bid})" title="Prix limite/stop = bid">bid</span><span class="fill" onclick="fillPrice(${last})" title="= dernier">dernier</span><span class="fill" onclick="fillPrice(${q.ask})" title="= ask">ask</span>`
+      : '';
+    el.innerHTML = `<span class="last ${cls}">${fmtPx(last, dec)}</span><span class="ba">bid <b>${fmtPx(q.bid, dec)}</b> · ask <b>${fmtPx(q.ask, dec)}</b>${q.high != null ? ` · H <b>${fmtPx(q.high, dec)}</b> B <b>${fmtPx(q.low, dec)}</b>` : ''}</span>${fills}${age > 120000 ? `<span class="stale">figé depuis ${Math.round(age / 60000)} min</span>` : ''}`;
+  }
+  window.fillPrice = (p) => { if (p == null || !isFinite(p)) return; $('price').value = inst ? Number(p).toFixed(decOf(inst.tickSize)) : p; updateTicket(); };
+
   function offlineTop() { $('offline').style.display = ''; $('offline').innerHTML = '<div class="offline"><div class="bigt">Copieur injoignable</div><div>Le moteur ne répond pas. Relance l’application (ou <code>npm start</code>), puis recharge.</div></div>'; }
   async function refresh() {
     try {
-      const r = await fetch('/api/state', { cache: 'no-store' });
+      const w = ($('sym').value || '').trim().toUpperCase();
+      const r = await fetch('/api/state' + (w ? '?watch=' + encodeURIComponent(w) : ''), { cache: 'no-store' });
       if (!r.ok) throw new Error('http ' + r.status);
       render(await r.json()); lastOk = Date.now();
     } catch (e) { if (Date.now() - lastOk > 6000) offlineTop(); }
   }
 
   // ── journal (SSE) ────────────────────────────────────────────────────────────
-  const KIND = { entry: 'ENTRÉE', bracket: 'SL/TP', exit: 'SORTIE', cancel: 'ANNUL.', flatten: 'À PLAT', modify: 'MODIF.', blocked: 'BLOQUÉ', info: 'INFO' };
+  const KIND = { entry: 'ENTRÉE', bracket: 'SL/TP', exit: 'SORTIE', cancel: 'ANNUL.', flatten: 'À PLAT', modify: 'MODIF.', blocked: 'BLOQUÉ', info: 'INFO', retry: 'RELANCE' };
   const fmtTime = (ts) => { const d = new Date(ts), p = n => String(n).padStart(2, '0'); return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`; };
   function addLog(e) {
     const el = $('log'); const empty = el.querySelector('.empty'); if (empty) empty.remove();
@@ -994,6 +1102,8 @@
       desc = esc(e.note || 'annulation') + (e.symbol ? ` · ${esc(e.symbol)}` : ''); res = `${e.ok} annulé(s)` + (e.failed ? ` · ${e.failed} échec(s)` : '');
     } else if (e.kind === 'flatten') {
       desc = esc(e.note || 'mise à plat'); res = `${e.ok} clôturée(s)` + (e.failed ? ` · ${e.failed} échec(s)` : '') + (e.skipped ? ` · ${e.skipped} ignoré(s)` : '');
+    } else if (e.kind === 'retry') {
+      desc = esc(e.note || 'relance') + (e.symbol ? ` · ${esc(e.symbol)}` : ''); res = e.failed ? `✗ ${esc((legs[0] || {}).error || 'échec')}` : '✓ réussie';
     } else { desc = esc(e.note || ''); res = ''; }
     const fresh = (Date.now() - (e.ts || 0)) < 4000;
     const row = document.createElement('div');
@@ -1058,6 +1168,8 @@
   $('brk').checked = S.brk; $('brkBody').classList.toggle('off', !S.brk);
   $('stopTicks').value = S.stopTicks; $('targetTicks').value = S.targetTicks;
   $('confirm').checked = S.confirm;
+  $('sound').checked = S.sound;
+  $('sound').addEventListener('change', () => { S.sound = $('sound').checked; saveS(); if (S.sound) beep('ok'); });
   $('skipInfo').onclick = () => { SKIP = {}; saveSkip(); showToast('✓ Toutes les confirmations sont réaffichées'); };
   renderSkipInfo();
   if (S.sym) { $('sym').value = S.sym; }

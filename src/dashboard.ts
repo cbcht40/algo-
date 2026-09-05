@@ -47,7 +47,11 @@ export function startDashboard(engine: GroupEngine, port = 7879): void {
       res.end(PAGE);
       return;
     }
-    if (req.method === "GET" && path === "/api/state") return void json(200, engine.dashboardState());
+    if (req.method === "GET" && path === "/api/state") {
+      const w = url.searchParams.get("watch");
+      if (w) engine.watch(w);
+      return void json(200, engine.dashboardState());
+    }
     if (req.method === "GET" && path === "/api/logs") return void json(200, { lines: recentLogs(300) });
 
     if (req.method === "GET" && path === "/api/events") {
@@ -120,6 +124,10 @@ export function startDashboard(engine: GroupEngine, port = 7879): void {
           case "/api/cancel-all": return json(200, await engine.cancelOrders(p.spec ? String(p.spec) : undefined));
           case "/api/exits/modify": return json(200, await engine.modifyExits(String(p.key || ""), Number(p.price)));
           case "/api/exits/cancel": return json(200, await engine.cancelExits(String(p.key || "")));
+          case "/api/exits/breakeven": return json(200, await engine.breakevenExits(String(p.key || ""), Math.max(0, Math.floor(Number(p.offsetTicks) || 0))));
+          case "/api/exits/shift": return json(200, await engine.shiftExits(String(p.key || ""), Math.round(Number(p.ticks) || 0)));
+          case "/api/incidents/retry": return json(200, await engine.retryIncident(String(p.id || "")));
+          case "/api/incidents/ignore": return json(200, engine.ignoreIncident(String(p.id || "")));
           default:
             res.writeHead(404); res.end();
         }

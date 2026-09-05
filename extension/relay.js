@@ -3,8 +3,9 @@
 // storage as a backstop for tokens, and forwards everything to the local copier.
 //
 // Orders take the FASTEST path: a direct fetch to 127.0.0.1:7878 from this content script
-// (loopback = secure context, no service-worker wake-up). If that fails (blocked by the
-// browser, copier offline…), they fall back to the background service worker.
+// (loopback = secure context, no service-worker wake-up), authenticated by the pairing key
+// obtained from the background worker. If that fails (blocked by the browser, copier
+// offline, key not yet known…), they fall back to the background service worker.
 const COPIER = "http://127.0.0.1:7878";
 
 function forward(token) {
@@ -15,6 +16,17 @@ function forward(token) {
   }
 }
 
+let bridgeKey = "";
+function refreshKey() {
+  try {
+    chrome.runtime.sendMessage("key", (r) => { void chrome.runtime.lastError; if (r && r.key) bridgeKey = r.key; });
+  } catch {}
+}
+try {
+  chrome.storage.local.get("bridgeKey", (r) => { void chrome.runtime.lastError; if (r && r.bridgeKey) bridgeKey = r.bridgeKey; else refreshKey(); });
+  chrome.storage.onChanged.addListener((changes) => { if (changes.bridgeKey && changes.bridgeKey.newValue) bridgeKey = changes.bridgeKey.newValue; });
+} catch { refreshKey(); }
+
 let directOk = true; // switches to false after a direct failure, retried every minute
 let directRetryAt = 0;
 function relayViaBackground(relay) {
@@ -24,7 +36,8 @@ function relayViaBackground(relay) {
 }
 function relayOrder(relay) {
   const now = Date.now();
-  if (!directOk && now < directRetryAt) {
+  if (!bridgeKey || (!directOk && now < directRetryAt)) {
+    if (!bridgeKey) refreshKey();
     relayViaBackground(relay);
     return;
   }
@@ -32,12 +45,15 @@ function relayOrder(relay) {
     const p = fetch(COPIER + "/relay", {
       method: "POST",
       headers: { "Content-Type": "text/plain" },
-      body: JSON.stringify(relay),
+      body: JSON.stringify({ ...relay, key: bridgeKey }),
       keepalive: true,
       cache: "no-store",
     });
     p.then(
-      (r) => { if (!r.ok) { directOk = false; directRetryAt = now + 60000; relayViaBackground(relay); } else directOk = true; },
+      (r) => {
+        if (r.status === 403) { bridgeKey = ""; refreshKey(); relayViaBackground(relay); return; }
+        if (!r.ok) { directOk = false; directRetryAt = now + 60000; relayViaBackground(relay); } else directOk = true;
+      },
       () => { directOk = false; directRetryAt = now + 60000; relayViaBackground(relay); },
     );
   } catch {
@@ -80,4 +96,5 @@ setInterval(scanStorage, 5000);
 //    fallback path never pays a cold start at the moment an order is placed.
 setInterval(() => {
   try { chrome.runtime.sendMessage("ping", () => void chrome.runtime.lastError); } catch {}
+  if (!bridgeKey) refreshKey();
 }, 20000);

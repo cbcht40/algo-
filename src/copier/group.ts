@@ -12,7 +12,8 @@ import type { AccountEntry, Config } from "../config";
 import type { LicenseGate } from "../license";
 import { logger } from "../logger";
 import { TradovateClient, type ClientOptions } from "../tradovate/client";
-import type { Account, Fill, Order, OrderAction, OrderVersion, Position, PropsEvent } from "../tradovate/types";
+import { MarketDataClient, type Quote } from "../tradovate/marketData";
+import type { Account, Environment, Fill, Order, OrderAction, OrderVersion, Position, PropsEvent } from "../tradovate/types";
 import { jwtClaims } from "../tradovate/tokenStore";
 
 const TERMINAL = new Set(["Canceled", "Cancelled", "Rejected", "Expired", "Filled", "Completed"]);
@@ -24,6 +25,11 @@ const SYNC_GRACE_MS = 6_000;
  *  reste couvert : on garde 12 h, largement plus qu'une séance). */
 const PENDING_TTL_MS = 12 * 60 * 60_000;
 const INSTRUMENT_TTL_MS = 10 * 60_000;
+/** Un échec réseau est relancé automatiquement si le compte revient dans ce délai. */
+const AUTO_RETRY_WINDOW_MS = 90_000;
+const MAX_AUTO_ATTEMPTS = 2;
+/** Un symbole surveillé par le panneau reste abonné ce temps après la dernière demande. */
+const WATCH_TTL_MS = 3 * 60_000;
 
 export type EntryType = "Market" | "Limit" | "Stop";
 export type TimeInForce = "Day" | "GTC";
@@ -55,9 +61,30 @@ export interface GroupLeg {
 }
 
 /** Une action de groupe, diffusée au journal du dashboard. */
+/** Une action qui a ÉCHOUÉ sur un compte (ordre refusé, socket fermé…). Visible tant
+ *  qu'elle n'est pas résolue ; relancée automatiquement quand la cause est réseau. */
+export interface Incident {
+  id: string;
+  ts: number;
+  kind: "entry" | "bracket" | "modify" | "cancel" | "flatten";
+  label: string;
+  spec: string;
+  symbol?: string;
+  action?: OrderAction;
+  qty?: number;
+  error: string;
+  /** vrai = erreur de transport (socket fermé / timeout) → relance auto à la reconnexion. */
+  auto: boolean;
+  /** vrai = position potentiellement sans protection ou non clôturée. */
+  critical: boolean;
+  attempts: number;
+  status: "open" | "retrying" | "resolved" | "ignored";
+  resolvedAt?: number;
+}
+
 export interface GroupEvent {
   ts: number;
-  kind: "entry" | "bracket" | "exit" | "cancel" | "flatten" | "modify" | "blocked" | "info";
+  kind: "entry" | "bracket" | "exit" | "cancel" | "flatten" | "modify" | "blocked" | "info" | "retry";
   groupId?: string;
   symbol?: string;
   action?: OrderAction;
@@ -124,6 +151,14 @@ interface ExitOrder {
   qty: number;
   groupId: string;
   siblingId?: number;
+  /** prix d'entrée du compte (fill) — sert au breakeven. */
+  fillPrice?: number;
+}
+
+/** Erreur de transport (pas un refus Tradovate) → une relance a des chances d'aboutir. */
+export function isTransportError(err: unknown): boolean {
+  const s = String((err as Error)?.message || err || "").toLowerCase();
+  return /socket (not open|closed)|timeout|econn|network|not open/.test(s);
 }
 
 export interface ExitGroup {
@@ -348,6 +383,13 @@ export class GroupEngine {
   private bySourceOrder = new Map<number, TeeRecord>();
   private relayStats = { lastSeenAt: 0, count: 0, lastDelayMs: undefined as number | undefined, extensionSeenAt: 0 };
 
+  /** Incidents (échecs par compte) + leur relance. */
+  private incidents = new Map<string, Incident & { retry: () => Promise<void>; account: GroupAccount }>();
+  /** Flux de marché (cotations) : un socket, alimenté par le token du premier login prêt. */
+  private md?: MarketDataClient;
+  private watched = new Map<string, number>(); // symbole surveillé par le panneau → dernier vu
+  private mdWanted = new Map<string, number | undefined>(); // symbole → contractId
+
   constructor(cfg: Config) {
     this.cfg = cfg;
     this.relayEnabled = cfg.relay !== false;
@@ -458,6 +500,8 @@ export class GroupEngine {
     this.syncTimer = setInterval(() => {
       try { this.evaluateSync(); } catch (err) { log.warn(`sync eval: ${String(err)}`); }
       this.purgePending();
+      try { this.ensureMarketData(); this.reconcileMarketData(); } catch (err) { log.debug(`md: ${String(err)}`); }
+      void this.retrySweep();
     }, 3_000);
   }
 
@@ -496,6 +540,13 @@ export class GroupEngine {
         log.info(`Compte ${a.label}: ${acct.name}#${acct.id} (×${a.multiplier}${a.enabled ? "" : ", hors groupe"})`);
       } catch (err) {
         log.warn(`Compte ${a.label} non résolu : ${String(err)}`);
+      }
+    }
+    this.ensureMarketData();
+    // Login revenu : relance les échecs réseau récents de ses comptes.
+    for (const inc of this.incidents.values()) {
+      if (inc.status === "open" && inc.auto && inc.account.client === client && Date.now() - inc.ts < AUTO_RETRY_WINDOW_MS && inc.attempts < MAX_AUTO_ATTEMPTS) {
+        void this.retryIncident(inc.id, true);
       }
     }
   }
@@ -538,6 +589,37 @@ export class GroupEngine {
     const px = exitPrices(pb.entryAction, fill.price, pb.tickSize, pb.stopTicks, pb.targetTicks);
     if (px.stop === undefined && px.target === undefined) return;
     const a = pb.account;
+    const leg = await this.placeBracket(pb, fill, px);
+    if (leg.status === "failed") {
+      this.addIncident({
+        kind: "bracket", account: a, symbol: pb.symbol, action: px.exitAction, qty: fill.qty, error: leg.error || "échec",
+        critical: true, auto: isTransportError(leg.error),
+        retry: async () => {
+          const l2 = await this.placeBracket(pb, fill, px);
+          if (l2.status === "failed") throw new Error(l2.error || "échec");
+        },
+      });
+    }
+    this.emit({
+      ts: Date.now(),
+      kind: "bracket",
+      groupId: pb.groupId,
+      symbol: pb.symbol,
+      action: px.exitAction,
+      qty: fill.qty,
+      price: px.target,
+      stopPrice: px.stop,
+      ok: leg.status === "failed" ? 0 : 1,
+      failed: leg.status === "failed" ? 1 : 0,
+      skipped: 0,
+      legs: [leg],
+      note: `fill ${a.label} @${fill.price}`,
+    });
+  }
+
+  /** Pose le SL/TP d'un fill (OCO si les deux, ordre simple sinon). Réutilisé par la relance. */
+  private async placeBracket(pb: PendingBracket, fill: Fill, px: ReturnType<typeof exitPrices>): Promise<GroupLeg> {
+    const a = pb.account;
     const t0 = Date.now();
     const leg: GroupLeg = { label: a.label, spec: a.spec, qty: fill.qty, status: "placed" };
     try {
@@ -562,8 +644,8 @@ export class GroupEngine {
         if (d.failureReason || d.failureText) throw new Error(String(d.failureText || d.failureReason));
         const stopId = Number(d.orderId);
         const targetId = Number(d.ocoId);
-        if (stopId) this.registerExit({ orderId: stopId, account: a, contractId: fill.contractId, symbol: pb.symbol, role: "stop", action: px.exitAction, price: px.stop, qty: fill.qty, groupId: pb.groupId, siblingId: targetId || undefined });
-        if (targetId) this.registerExit({ orderId: targetId, account: a, contractId: fill.contractId, symbol: pb.symbol, role: "target", action: px.exitAction, price: px.target, qty: fill.qty, groupId: pb.groupId, siblingId: stopId || undefined });
+        if (stopId) this.registerExit({ orderId: stopId, account: a, contractId: fill.contractId, symbol: pb.symbol, role: "stop", action: px.exitAction, price: px.stop, qty: fill.qty, groupId: pb.groupId, siblingId: targetId || undefined, fillPrice: fill.price });
+        if (targetId) this.registerExit({ orderId: targetId, account: a, contractId: fill.contractId, symbol: pb.symbol, role: "target", action: px.exitAction, price: px.target, qty: fill.qty, groupId: pb.groupId, siblingId: stopId || undefined, fillPrice: fill.price });
         leg.orderId = stopId || undefined;
         leg.ackMs = Date.now() - t0;
         log.info(`  ${a.label}: SL/TP posés (${pb.symbol} fill ${fill.price} → stop ${px.stop} · cible ${px.target}) #${stopId}/#${targetId}`);
@@ -585,7 +667,7 @@ export class GroupEngine {
         const d = (res.d ?? {}) as Record<string, any>;
         if (d.failureReason || d.failureText) throw new Error(String(d.failureText || d.failureReason));
         const id = Number(d.orderId);
-        if (id) this.registerExit({ orderId: id, account: a, contractId: fill.contractId, symbol: pb.symbol, role, action: px.exitAction, price, qty: fill.qty, groupId: pb.groupId });
+        if (id) this.registerExit({ orderId: id, account: a, contractId: fill.contractId, symbol: pb.symbol, role, action: px.exitAction, price, qty: fill.qty, groupId: pb.groupId, fillPrice: fill.price });
         leg.orderId = id || undefined;
         leg.ackMs = Date.now() - t0;
         log.info(`  ${a.label}: ${role === "stop" ? "stop" : "cible"} posé(e) ${pb.symbol} @${price} #${id}`);
@@ -595,21 +677,7 @@ export class GroupEngine {
       leg.error = String((err as Error)?.message || err);
       log.error(`  ${a.label}: SL/TP ÉCHEC — ${leg.error}`);
     }
-    this.emit({
-      ts: Date.now(),
-      kind: "bracket",
-      groupId: pb.groupId,
-      symbol: pb.symbol,
-      action: px.exitAction,
-      qty: fill.qty,
-      price: px.target,
-      stopPrice: px.stop,
-      ok: leg.status === "failed" ? 0 : 1,
-      failed: leg.status === "failed" ? 1 : 0,
-      skipped: 0,
-      legs: [leg],
-      note: `fill ${a.label} @${fill.price}`,
-    });
+    return leg;
   }
 
   private registerExit(x: ExitOrder): void {
@@ -661,6 +729,7 @@ export class GroupEngine {
           qty: v?.orderQty ?? s.qty,
           groupId: s.groupId,
           siblingId: s.orderId,
+          fillPrice: s.fillPrice,
         });
         s.siblingId = o.id;
       }
@@ -893,6 +962,19 @@ export class GroupEngine {
           leg.status = "failed";
           leg.error = String((err as Error)?.message || err);
           log.error(`  ${a.label}: ÉCHEC — ${leg.error}`);
+          this.addIncident({
+            kind: "entry", account: a, symbol, action: req.action, qty: q, error: leg.error, critical: false, auto: isTransportError(err),
+            retry: async () => {
+              const res = await a.client.request("order/placeorder", body);
+              const d = (res.d ?? {}) as Record<string, any>;
+              if (d.failureReason || d.failureText) throw new Error(String(d.failureText || d.failureReason));
+              const id = Number(d.orderId) || undefined;
+              if (wantBracket && id && inst) {
+                this.pendingBrackets.set(id, { orderId: id, account: a, symbol: inst.symbol, entryAction: req.action, stopTicks: req.bracket?.stopTicks, targetTicks: req.bracket?.targetTicks, tickSize: inst.tickSize, tif, groupId, createdAt: Date.now(), filledQty: 0 });
+                this.replayEarlyFills(id);
+              }
+            },
+          });
         }
       }),
     );
@@ -1035,6 +1117,19 @@ export class GroupEngine {
           leg.status = tl.status = "failed";
           leg.error = tl.error = String((err as Error)?.message || err);
           log.error(`  ${a.label}: relais ÉCHEC — ${leg.error}`);
+          const ep = endpoint === "orderstrategy/startorderstrategy" ? "orderStrategy/startOrderStrategy" : endpoint;
+          this.addIncident({
+            kind: "entry", account: a, symbol, action, qty: q, error: leg.error, critical: false, auto: isTransportError(err),
+            retry: async () => {
+              const res = await a.client.request(ep, tb);
+              const d = (res.d ?? {}) as Record<string, any>;
+              if (d.failureReason || d.failureText || d.errorText) throw new Error(String(d.failureText || d.failureReason || d.errorText));
+              tl.orderId = Number(d.orderId) || undefined;
+              tl.ocoId = Number(d.ocoId) || undefined;
+              tl.strategyId = Number(d.orderStrategy?.id) || undefined;
+              tl.status = "placed";
+            },
+          });
         }
       }),
     );
@@ -1216,15 +1311,13 @@ export class GroupEngine {
         if (x.role === "stop") body.stopPrice = px; else body.price = px;
         if (this.cfg.dryRun) { leg.status = "dry"; modified++; x.price = px; return; }
         try {
-          const res = await x.account.client.request("order/modifyorder", body);
-          const d = (res.d ?? {}) as Record<string, any>;
-          if (d.failureReason || d.failureText) throw new Error(String(d.failureText || d.failureReason));
-          x.price = px;
+          await this.modifyExit(x, px);
           modified++;
         } catch (err) {
           leg.status = "failed";
           leg.error = String((err as Error)?.message || err);
           errors.push(`${x.account.label}: ${leg.error}`);
+          this.addIncident({ kind: "modify", account: x.account, symbol: x.symbol, action: x.action, qty: x.qty, error: leg.error, critical: false, auto: isTransportError(err), retry: () => this.modifyExit(x, px) });
         }
       }),
     );
@@ -1244,6 +1337,208 @@ export class GroupEngine {
       note: list[0]!.role === "stop" ? "stops déplacés" : "cibles déplacées",
     });
     return { ok: errors.length === 0, modified, errors };
+  }
+
+  /** Modifie UNE sortie (prix). Lève en cas de refus. */
+  private async modifyExit(x: ExitOrder, price: number): Promise<void> {
+    const body: Record<string, unknown> = { orderId: x.orderId, orderQty: x.qty, orderType: x.role === "stop" ? "Stop" : "Limit", isAutomated: true };
+    if (x.role === "stop") body.stopPrice = price; else body.price = price;
+    if (this.cfg.dryRun) { x.price = price; return; }
+    const res = await x.account.client.request("order/modifyorder", body);
+    const d = (res.d ?? {}) as Record<string, any>;
+    if (d.failureReason || d.failureText) throw new Error(String(d.failureText || d.failureReason));
+    x.price = price;
+  }
+
+  private tickOf(symbol: string): number | undefined {
+    return this.instruments.get(symbol)?.tickSize;
+  }
+
+  /** Breakeven groupé : chaque STOP du groupe est ramené au prix d'entrée de SON compte
+   *  (fill mémorisé, sinon prix moyen de la position), ± un décalage en ticks dans le sens
+   *  favorable (offset > 0 = verrouille un petit gain). */
+  async breakevenExits(key: string, offsetTicks = 0): Promise<{ ok: boolean; modified: number; skipped: string[]; errors: string[] }> {
+    const list = [...this.exits.values()].filter((x) => `${x.symbol}|${x.role}|${x.action}` === key && x.role === "stop");
+    if (!list.length) return { ok: false, modified: 0, skipped: [], errors: ["aucun stop pour ce groupe"] };
+    let tick = this.tickOf(list[0]!.symbol);
+    if (!tick) { try { tick = (await this.resolveInstrument(list[0]!.symbol)).tickSize; } catch { /* sans tick : pas d'offset */ } }
+    const skipped: string[] = [];
+    const errors: string[] = [];
+    let modified = 0;
+    const legs: GroupLeg[] = [];
+    await Promise.all(
+      list.map(async (x) => {
+        const pos = x.account.client.openPositions(x.account.accountId).find((p) => p.contractId === x.contractId);
+        const entry = x.fillPrice ?? pos?.netPrice;
+        if (!entry) { skipped.push(x.account.label); legs.push({ label: x.account.label, spec: x.account.spec, qty: x.qty, status: "skipped", error: "prix d'entrée inconnu" }); return; }
+        // Stop Sell = position longue → BE au-dessus de l'entrée si offset ; Stop Buy = short → en dessous.
+        const dir = x.action === "Sell" ? 1 : -1;
+        const px = tick ? roundToTick(entry + dir * offsetTicks * tick, tick) : entry;
+        const leg: GroupLeg = { label: x.account.label, spec: x.account.spec, qty: x.qty, status: "placed", orderId: x.orderId };
+        legs.push(leg);
+        try { await this.modifyExit(x, px); modified++; if (this.cfg.dryRun) leg.status = "dry"; }
+        catch (err) {
+          leg.status = "failed"; leg.error = String((err as Error)?.message || err); errors.push(`${x.account.label}: ${leg.error}`);
+          this.addIncident({ kind: "modify", account: x.account, symbol: x.symbol, action: x.action, qty: x.qty, error: leg.error, critical: false, auto: isTransportError(err), retry: () => this.modifyExit(x, px) });
+        }
+      }),
+    );
+    log.info(`Breakeven ${list[0]!.symbol} (+${offsetTicks} tick) : ${modified}/${list.length} stop(s) déplacé(s)` + (skipped.length ? ` · ${skipped.length} sans prix d'entrée` : "") + (errors.length ? ` · ${errors.length} erreur(s)` : ""));
+    this.emit({ ts: Date.now(), kind: "modify", symbol: list[0]!.symbol, action: list[0]!.action, orderType: "Stop", ok: modified, failed: errors.length, skipped: skipped.length, legs, note: `breakeven${offsetTicks ? ` +${offsetTicks} tick` : ""}` });
+    return { ok: errors.length === 0, modified, skipped, errors };
+  }
+
+  /** Décale chaque sortie du groupe de N ticks (signé, en prix) PAR RAPPORT À SON PROPRE
+   *  prix — conserve les écarts entre comptes (fills différents). */
+  async shiftExits(key: string, ticks: number): Promise<{ ok: boolean; modified: number; errors: string[] }> {
+    const list = [...this.exits.values()].filter((x) => `${x.symbol}|${x.role}|${x.action}` === key);
+    if (!list.length) return { ok: false, modified: 0, errors: ["aucune sortie pour ce groupe"] };
+    if (!Number.isFinite(ticks) || !ticks) return { ok: false, modified: 0, errors: ["décalage invalide"] };
+    let tick = this.tickOf(list[0]!.symbol);
+    if (!tick) { try { tick = (await this.resolveInstrument(list[0]!.symbol)).tickSize; } catch (err) { return { ok: false, modified: 0, errors: [`tick inconnu : ${String((err as Error)?.message || err)}`] }; } }
+    const errors: string[] = [];
+    let modified = 0;
+    const legs: GroupLeg[] = [];
+    await Promise.all(
+      list.map(async (x) => {
+        const px = roundToTick(x.price + ticks * tick!, tick!);
+        const leg: GroupLeg = { label: x.account.label, spec: x.account.spec, qty: x.qty, status: "placed", orderId: x.orderId };
+        legs.push(leg);
+        try { await this.modifyExit(x, px); modified++; if (this.cfg.dryRun) leg.status = "dry"; }
+        catch (err) {
+          leg.status = "failed"; leg.error = String((err as Error)?.message || err); errors.push(`${x.account.label}: ${leg.error}`);
+          this.addIncident({ kind: "modify", account: x.account, symbol: x.symbol, action: x.action, qty: x.qty, error: leg.error, critical: false, auto: isTransportError(err), retry: () => this.modifyExit(x, px) });
+        }
+      }),
+    );
+    log.info(`${list[0]!.role === "stop" ? "Stops" : "Cibles"} ${list[0]!.symbol} décalé(e)s de ${ticks > 0 ? "+" : ""}${ticks} tick(s) : ${modified}/${list.length}`);
+    this.emit({ ts: Date.now(), kind: "modify", symbol: list[0]!.symbol, action: list[0]!.action, orderType: list[0]!.role === "stop" ? "Stop" : "Limit", ok: modified, failed: errors.length, skipped: 0, legs, note: `${list[0]!.role === "stop" ? "stops" : "cibles"} décalé(e)s de ${ticks > 0 ? "+" : ""}${ticks} tick(s)` });
+    return { ok: errors.length === 0, modified, errors };
+  }
+
+  // --- incidents ---------------------------------------------------------------------
+
+  private addIncident(i: { kind: Incident["kind"]; account: GroupAccount; symbol?: string; action?: OrderAction; qty?: number; error: string; critical: boolean; auto: boolean; retry: () => Promise<void> }): void {
+    const id = uid();
+    this.incidents.set(id, {
+      id, ts: Date.now(), kind: i.kind, label: i.account.label, spec: i.account.spec, symbol: i.symbol, action: i.action, qty: i.qty,
+      error: i.error, auto: i.auto, critical: i.critical, attempts: 0, status: "open", retry: i.retry, account: i.account,
+    });
+    log.warn(`⚠ INCIDENT ${i.kind} ${i.account.label}${i.symbol ? ` ${i.symbol}` : ""} : ${i.error}${i.auto ? " (relance auto à la reconnexion)" : ""}${i.critical ? " — CRITIQUE" : ""}`);
+    // Purge : garde 100 incidents max.
+    if (this.incidents.size > 100) this.incidents.delete(this.incidents.keys().next().value as string);
+  }
+
+  /** Relance une action échouée (bouton « Réessayer » ou automatique). */
+  async retryIncident(id: string, auto = false): Promise<{ ok: boolean; error?: string }> {
+    const inc = this.incidents.get(id);
+    if (!inc) return { ok: false, error: "incident inconnu" };
+    if (inc.status === "retrying") return { ok: false, error: "déjà en cours" };
+    if (inc.status === "resolved") return { ok: true };
+    if (!inc.account.client.isReady) return { ok: false, error: "compte déconnecté" };
+    inc.status = "retrying";
+    inc.attempts++;
+    const leg: GroupLeg = { label: inc.label, spec: inc.spec, qty: inc.qty ?? 0, status: "placed" };
+    try {
+      await inc.retry();
+      inc.status = "resolved";
+      inc.resolvedAt = Date.now();
+      log.info(`✓ Relance ${auto ? "automatique" : "manuelle"} réussie : ${inc.kind} ${inc.label}${inc.symbol ? ` ${inc.symbol}` : ""}`);
+      this.emit({ ts: Date.now(), kind: "retry", symbol: inc.symbol, action: inc.action, qty: inc.qty, ok: 1, failed: 0, skipped: 0, legs: [leg], note: `relance ${auto ? "auto" : "manuelle"} · ${inc.kind} · ${inc.label}` });
+      return { ok: true };
+    } catch (err) {
+      inc.status = "open";
+      inc.error = String((err as Error)?.message || err);
+      inc.auto = inc.auto && isTransportError(err);
+      leg.status = "failed";
+      leg.error = inc.error;
+      log.error(`✗ Relance échouée : ${inc.kind} ${inc.label} — ${inc.error}`);
+      this.emit({ ts: Date.now(), kind: "retry", symbol: inc.symbol, action: inc.action, qty: inc.qty, ok: 0, failed: 1, skipped: 0, legs: [leg], note: `relance ${auto ? "auto" : "manuelle"} · ${inc.kind} · ${inc.label}` });
+      return { ok: false, error: inc.error };
+    }
+  }
+
+  ignoreIncident(id: string): { ok: boolean; error?: string } {
+    const inc = this.incidents.get(id);
+    if (!inc) return { ok: false, error: "incident inconnu" };
+    inc.status = "ignored";
+    inc.resolvedAt = Date.now();
+    log.info(`Incident ignoré : ${inc.kind} ${inc.label}`);
+    return { ok: true };
+  }
+
+  /** Balayage périodique : un échec réseau dont le compte est déjà revenu (timeout isolé)
+   *  est relancé une fois après quelques secondes. */
+  private async retrySweep(): Promise<void> {
+    const now = Date.now();
+    for (const inc of this.incidents.values()) {
+      if (inc.status !== "open" || !inc.auto || inc.attempts >= MAX_AUTO_ATTEMPTS) continue;
+      const age = now - inc.ts;
+      if (age < 4_000 || age > AUTO_RETRY_WINDOW_MS) continue;
+      if (!inc.account.client.isReady) continue;
+      await this.retryIncident(inc.id, true);
+    }
+  }
+
+  listIncidents(): Incident[] {
+    return [...this.incidents.values()]
+      .filter((i) => i.status === "open" || i.status === "retrying" || (i.resolvedAt && Date.now() - i.resolvedAt < 60_000))
+      .map(({ retry: _r, account: _a, ...rest }) => rest)
+      .sort((a, b) => b.ts - a.ts);
+  }
+
+  // --- flux de marché ---------------------------------------------------------------
+
+  /** Le panneau regarde un instrument : abonne-le (TTL 3 min après la dernière demande). */
+  watch(symbol: string): void {
+    const sym = String(symbol || "").trim().toUpperCase();
+    if (!sym) return;
+    this.watched.set(sym, Date.now());
+    if (!this.mdWanted.has(sym)) {
+      this.mdWanted.set(sym, this.instruments.get(sym)?.contractId);
+      this.md?.subscribe(sym, this.instruments.get(sym)?.contractId);
+      // Résout l'instrument en fond (tick, valeur du point → P&L, arrondis).
+      void this.resolveInstrument(sym).then((i) => { this.mdWanted.set(i.symbol, i.contractId); this.md?.subscribe(i.symbol, i.contractId); }).catch(() => undefined);
+    }
+  }
+
+  private ensureMarketData(): void {
+    if (this.md?.isAlive) return;
+    const c = this.anyReadyClient();
+    if (!c || !c.mdToken) return;
+    if (this.md && this.md.environment === c.env) return; // en reconnexion, on laisse faire
+    void this.md?.stop();
+    const md = new MarketDataClient({ env: c.env as Environment, tokenProvider: () => this.anyReadyClient()?.mdToken });
+    this.md = md;
+    for (const [sym, cid] of this.mdWanted) md.subscribe(sym, cid);
+    md.start().catch((err) => log.debug(`md start : ${String((err as Error)?.message || err)}`));
+  }
+
+  /** Abonnements = instruments surveillés (TTL) + positions ouvertes + sorties en place. */
+  private reconcileMarketData(): void {
+    const now = Date.now();
+    const wanted = new Map<string, number | undefined>();
+    for (const [sym, ts] of this.watched) { if (now - ts < WATCH_TTL_MS) wanted.set(sym, this.instruments.get(sym)?.contractId); else this.watched.delete(sym); }
+    for (const a of this.accounts) {
+      if (!a.accountId) continue;
+      for (const p of a.client.openPositions(a.accountId)) if (!p.symbol.startsWith("#")) wanted.set(p.symbol, p.contractId);
+    }
+    for (const x of this.exits.values()) wanted.set(x.symbol, x.contractId);
+    for (const [sym, cid] of wanted) {
+      if (!this.mdWanted.has(sym)) { this.mdWanted.set(sym, cid); this.md?.subscribe(sym, cid); }
+      if (!this.instruments.get(sym)) void this.resolveInstrument(sym).catch(() => undefined);
+    }
+    for (const sym of [...this.mdWanted.keys()]) if (!wanted.has(sym)) { this.mdWanted.delete(sym); this.md?.unsubscribe(sym); }
+  }
+
+  quotes(): Record<string, Quote & { tickSize?: number; valuePerPoint?: number; decimals?: number }> {
+    const out: Record<string, Quote & { tickSize?: number; valuePerPoint?: number; decimals?: number }> = {};
+    if (!this.md) return out;
+    for (const [sym, q] of Object.entries(this.md.allQuotes())) {
+      const inst = this.instruments.get(sym);
+      out[sym] = { ...q, tickSize: inst?.tickSize, valuePerPoint: inst?.valuePerPoint, decimals: inst ? tickDecimals(inst.tickSize) : undefined };
+    }
+    return out;
   }
 
   async cancelExits(key: string): Promise<{ ok: boolean; canceled: number; errors: string[] }> {
@@ -1332,6 +1627,10 @@ export class GroupEngine {
             leg.status = "failed";
             leg.error = String((err as Error)?.message || err);
             errors.push(`${a.label} flatten ${p.symbol}: ${leg.error}`);
+            this.addIncident({
+              kind: "flatten", account: a, symbol: p.symbol, qty: Math.abs(p.netPos), error: leg.error, critical: true, auto: isTransportError(err),
+              retry: async () => { await a.client.request("order/liquidateposition", { accountId: a.accountId, contractId: p.contractId, admin: false }); },
+            });
           }
         }
       }),
@@ -1541,6 +1840,17 @@ export class GroupEngine {
     const exitsByAccount = new Map<string, number>();
     for (const x of this.exits.values()) exitsByAccount.set(x.account.key, (exitsByAccount.get(x.account.key) ?? 0) + 1);
     const connected = accounts.filter((a) => a.client.isReady).length;
+    const quotes = this.quotes();
+    // P&L latent par position : (dernier − prix moyen) × net × valeur du point.
+    const withPnl = <T extends { symbol: string; netPos: number; netPrice?: number }>(ps: T[]): Array<T & { unrealized?: number }> =>
+      ps.map((p) => {
+        const q = quotes[p.symbol];
+        const last = q?.last ?? (q?.bid && q?.ask ? (q.bid + q.ask) / 2 : undefined);
+        if (last === undefined || !p.netPrice || !q?.valuePerPoint) return p;
+        return { ...p, unrealized: Number(((last - p.netPrice) * p.netPos * q.valuePerPoint).toFixed(2)) };
+      });
+    let groupPnl = 0;
+    let pnlKnown = false;
     return {
       mode: "sync" as const,
       environment: this.cfg.environment,
@@ -1558,6 +1868,9 @@ export class GroupEngine {
       total: accounts.length,
       accounts: accounts.map((a, i) => {
         const working = a.accountId ? a.client.workingOrders(a.accountId) : [];
+        const positions = withPnl(named(allPos[i]!));
+        let pnl: number | undefined;
+        for (const p of positions) if (p.unrealized !== undefined) { pnl = (pnl ?? 0) + p.unrealized; groupPnl += p.unrealized; pnlKnown = true; }
         return {
           label: a.label,
           spec: a.spec || null,
@@ -1568,13 +1881,18 @@ export class GroupEngine {
           resolved: !!a.accountId,
           enabled: a.enabled,
           multiplier: a.multiplier,
-          positions: named(allPos[i]!),
+          positions,
+          unrealized: pnl,
           workingOrders: working.length,
           exits: exitsByAccount.get(a.key) ?? 0,
           pendingBrackets: [...this.pendingBrackets.values()].filter((p) => p.account === a).length,
           desync: desyncBySpec.get(a.spec) ?? [],
         };
       }),
+      groupUnrealized: pnlKnown ? Number(groupPnl.toFixed(2)) : null,
+      quotes,
+      marketData: { connected: !!this.md?.isAlive, symbols: this.md?.subscribedSymbols ?? [] },
+      incidents: this.listIncidents(),
       exits: this.exitGroups(),
       desync: this.confirmedDesync,
       recentSymbols: this.recentSymbols,
@@ -1593,6 +1911,7 @@ export class GroupEngine {
 
   async stop(): Promise<void> {
     if (this.syncTimer) { clearInterval(this.syncTimer); this.syncTimer = undefined; }
+    await this.md?.stop();
     await Promise.all([...this.clients.values()].map((c) => c.stop()));
   }
 }
