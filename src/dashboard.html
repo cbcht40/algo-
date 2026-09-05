@@ -345,6 +345,43 @@
   .modal .macts { display:flex; justify-content:flex-end; gap:10px; }
   .btn.danger.solid { background:var(--neon-red); color:#fff; border-color:transparent; box-shadow:inset 0 1px 0 rgba(255,255,255,.2), 0 4px 18px rgba(242,110,138,.35); }
   .btn.danger.solid:hover { filter:brightness(1.08); background:var(--neon-red); }
+  /* ── pastille d'avis IA ────────────────────────────────────────────────── */
+  .ai-pill { position:fixed; right:22px; bottom:74px; z-index:60; display:flex; align-items:center; gap:10px; padding:7px 12px 7px 7px; border-radius:999px; background:#14141f; border:1px solid var(--border2); box-shadow:0 12px 40px rgba(0,0,0,.55), 0 0 0 1px rgba(124,116,255,.15); cursor:pointer; opacity:0; transform:translateY(24px) scale(.9); transition:opacity .25s, transform .25s; -webkit-backdrop-filter:blur(10px); backdrop-filter:blur(10px); }
+  .ai-pill.show { opacity:1; transform:none; animation:pop .5s cubic-bezier(.2,1.4,.4,1); }
+  @keyframes pop { 0% { transform:translateY(24px) scale(.6); opacity:0; } 60% { transform:translateY(-4px) scale(1.06); opacity:1; } 100% { transform:none; } }
+  .ai-pill:hover { border-color:rgba(124,116,255,.55); }
+  .ai-pill .ring { position:relative; width:46px; height:46px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; background:conic-gradient(var(--c) calc(var(--p) * 1%), rgba(255,255,255,.08) 0); }
+  .ai-pill .ring::before { content:''; position:absolute; inset:4px; border-radius:50%; background:#14141f; }
+  .ai-pill .ring span { position:relative; font-family:var(--display); font-weight:700; font-size:15px; color:var(--c); letter-spacing:-.02em; }
+  .ai-pill .ring span small { font-size:9px; font-weight:600; opacity:.8; }
+  .ai-pill .txt { display:flex; flex-direction:column; gap:1px; max-width:230px; }
+  .ai-pill .txt b { font-size:12.5px; color:var(--txt); font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ai-pill .txt span { font-family:var(--mono); font-size:10.5px; color:var(--txt3); }
+  .ai-pill .x { width:22px; height:22px; border-radius:50%; border:1px solid var(--border); background:var(--card2); color:var(--txt3); display:flex; align-items:center; justify-content:center; padding:0; flex:none; }
+  .ai-pill .x:hover { color:var(--txt); }
+  .ai-pill.go { --c:#4f7cff; } .ai-pill.caution { --c:#fbbf24; } .ai-pill.avoid { --c:#f26e8a; } .ai-pill.wait { --c:#7c74ff; } .ai-pill.err { --c:#9a9ab4; }
+  .ai-pill.wait .ring { background:conic-gradient(var(--c) 25%, rgba(255,255,255,.08) 0); animation:spin 1.2s linear infinite; }
+  .ai-pill.wait .ring span { animation:none; }
+  /* rapport de position (modal) */
+  .rep .head { display:flex; gap:16px; align-items:center; margin-bottom:12px; }
+  .rep .ring { position:relative; width:72px; height:72px; border-radius:50%; flex:none; display:flex; align-items:center; justify-content:center; background:conic-gradient(var(--c) calc(var(--p) * 1%), rgba(255,255,255,.08) 0); }
+  .rep .ring::before { content:''; position:absolute; inset:5px; border-radius:50%; background:#12121a; }
+  .rep .ring span { position:relative; font-family:var(--display); font-weight:700; font-size:24px; color:var(--c); letter-spacing:-.02em; }
+  .rep .ring span small { font-size:11px; opacity:.8; }
+  .rep .verdict { font-family:var(--mono); font-size:10.5px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; color:var(--c); margin-bottom:4px; }
+  .rep .headline { font-size:15px; font-weight:600; line-height:1.4; }
+  .rep .meta { font-family:var(--mono); font-size:11px; color:var(--txt3); margin-top:6px; }
+  .rep .report { font-size:13.5px; line-height:1.6; color:var(--txt); padding:12px 14px; border-radius:10px; background:var(--card3); border:1px solid var(--border); margin:12px 0; white-space:pre-wrap; }
+  .rep ul { margin:0 0 10px 18px; font-size:13px; color:var(--txt2); line-height:1.5; }
+  .rep ul li { margin-bottom:4px; }
+  .rep .warn { display:flex; gap:8px; align-items:flex-start; color:var(--amber); font-size:13px; line-height:1.45; padding:9px 12px; border-radius:9px; background:rgba(251,191,36,.08); border:1px solid rgba(251,191,36,.35); }
+  .rep .ctx { font-family:var(--mono); font-size:11px; color:var(--txt3); margin-top:12px; }
+  .rep.go { --c:#4f7cff; } .rep.caution { --c:#fbbf24; } .rep.avoid { --c:#f26e8a; }
+  .scores { display:flex; gap:6px; flex-wrap:wrap; padding:0 16px 12px; }
+  .scores .sc { display:inline-flex; align-items:center; gap:7px; font-family:var(--mono); font-size:11px; color:var(--txt2); padding:4px 9px 4px 5px; border-radius:999px; border:1px solid var(--border); background:var(--card3); cursor:pointer; }
+  .scores .sc:hover { border-color:var(--border2); color:var(--txt); }
+  .scores .sc b { font-family:var(--display); font-size:13px; }
+  .scores .sc.go b { color:var(--accent2); } .scores .sc.caution b { color:var(--amber); } .scores .sc.avoid b { color:var(--red); } .scores .sc.err b { color:var(--txt3); }
   .toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(20px); background:#16161f; border:1px solid var(--border2); color:var(--txt); font-family:var(--mono); font-size:13px; padding:11px 18px; border-radius:10px; opacity:0; pointer-events:none; transition:opacity .25s, transform .25s; z-index:50; box-shadow:0 8px 30px rgba(0,0,0,.5); max-width:80vw; }
   .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
   .offline { text-align:center; padding:60px 20px; color:var(--txt2); }
@@ -468,8 +505,9 @@
 
     <!-- ── JOURNAL & AVIS IA ── -->
     <section class="card" id="aiCard">
-      <div class="card-h">Avis IA <span class="sp"></span><span class="cnt" id="jrnStatus"></span><button class="btn sm" id="jrnSyncBtn" title="Demande au journal de récupérer tes trades Tradovate maintenant (sinon c'est automatique à chaque clôture)">Synchroniser</button></div>
+      <div class="card-h">Journal &amp; avis IA <span class="sp"></span><span class="cnt" id="jrnStatus"></span><button class="btn sm" id="jrnSyncBtn" title="Demande au journal de récupérer tes trades Tradovate maintenant (sinon c'est automatique à chaque clôture)">Synchroniser</button></div>
       <div class="ai" id="ai"></div>
+      <div class="scores" id="scores"></div>
     </section>
     </div>
 
@@ -514,6 +552,7 @@
 
   <footer>Tableau de bord local · 127.0.0.1:7879 · mode groupe synchronisé</footer>
 </div>
+<div class="ai-pill" id="aiPill" hidden></div>
 
 <script src="/vendor/lightweight-charts.js"></script>
 <script>
@@ -1111,12 +1150,72 @@
       else if (Notification.permission !== 'denied') Notification.requestPermission().then(p => { if (p === 'granted') new Notification(title, { body, silent: true }); });
     } catch (_) {}
   }
+  const VERDICT = { go: 'Favorable', caution: 'Prudence', avoid: 'À éviter' };
+  const entryMeta = (sc) => { const e = sc.entry || {}; return `${e.action === 'Sell' ? 'VENTE' : 'ACHAT'} ${e.qty || ''} ${esc(e.symbol || '')}${e.price ? ' @ ' + e.price : ''} · ${fmtTime(sc.ts)} · ${esc(e.source || '')}${sc.ms ? ` · ${(sc.ms / 1000).toFixed(1)} s` : ''}`; };
+  let scoreStore = []; // derniers avis (pour ouvrir un rapport depuis une pastille de l'historique)
+  // Pastille flottante : surgit à chaque nouvel avis, clic → rapport de la position.
+  let pillScore = null, pillTimer = null;
+  function showPill(sc, wait) {
+    const el = $('aiPill');
+    pillScore = sc || null;
+    clearTimeout(pillTimer);
+    if (wait) {
+      el.className = 'ai-pill show wait';
+      el.innerHTML = `<div class="ring" style="--p:25"><span>…</span></div><div class="txt"><b>Avis IA en cours</b><span>analyse de ton entrée</span></div>`;
+      el.hidden = false;
+      el.onclick = null;
+      return;
+    }
+    if (!sc) { el.hidden = true; return; }
+    const e = sc.entry || {};
+    const v = sc.error ? 'err' : (sc.verdict || 'caution');
+    el.className = `ai-pill show ${v}`;
+    el.style.setProperty('--p', sc.error ? 0 : Math.max(4, sc.score));
+    el.innerHTML = `<div class="ring" style="--p:${sc.error ? 0 : Math.max(4, sc.score)}"><span>${sc.error ? '?' : sc.score}<small>${sc.error ? '' : '%'}</small></span></div>
+      <div class="txt"><b>${esc(sc.error ? 'Avis IA indisponible' : (sc.headline || VERDICT[v] || 'Avis IA'))}</b><span>${e.action === 'Sell' ? 'vente' : 'achat'} ${e.qty || ''} ${esc(e.symbol || '')} · clique pour le rapport</span></div>
+      <button class="x" title="Masquer" aria-label="Masquer">${ico('x')}</button>`;
+    el.hidden = false;
+    el.querySelector('.x').onclick = (ev) => { ev.stopPropagation(); el.hidden = true; };
+    el.onclick = () => openReport(sc);
+    pillTimer = setTimeout(() => { if (!el.hidden) el.classList.remove('show'); setTimeout(() => { if (!el.classList.contains('show')) el.hidden = true; }, 300); }, 120000);
+  }
+  // Le petit rapport : pourquoi ce chiffre, d'après ses statistiques.
+  function openReport(sc) {
+    if (!sc) return;
+    const e = sc.entry || {};
+    const v = sc.error ? 'caution' : (sc.verdict || 'caution');
+    const ctx = sc.context || {};
+    const body = sc.error
+      ? `<div class="rep ${v}"><div class="head"><div class="ring" style="--p:0"><span>?</span></div><div><div class="verdict">indisponible</div><div class="headline">L’avis IA n’a pas pu être calculé.</div><div class="meta">${entryMeta(sc)}</div></div></div><div class="report">${esc(sc.error)}</div></div>`
+      : `<div class="rep ${v}">
+          <div class="head"><div class="ring" style="--p:${Math.max(4, sc.score)}"><span>${sc.score}<small>%</small></span></div><div><div class="verdict">${VERDICT[v] || v}</div><div class="headline">${esc(sc.headline || '')}</div><div class="meta">${entryMeta(sc)}</div></div></div>
+          ${sc.report ? `<div class="report">${esc(sc.report)}</div>` : ''}
+          ${(sc.reasons || []).length ? `<ul>${sc.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}
+          ${sc.warning ? `<div class="warn">${ico('alert')}<span>${esc(sc.warning)}</span></div>` : ''}
+          <div class="ctx">Basé sur ${ctx.decisions != null ? ctx.decisions + ' décision(s) de ton journal' : 'ton journal'}${ctx.todayCount != null ? ` · ${ctx.todayCount} trade(s) aujourd’hui (${(ctx.todayPnl || 0) >= 0 ? '+' : ''}${ctx.todayPnl || 0} $)` : ''}${ctx.reports ? ` · ${ctx.reports} analyse(s) IA récentes` : ''}${sc.ms ? ` · calculé en ${(sc.ms / 1000).toFixed(1)} s` : ''}</div>
+        </div>`;
+    infoBox({ title: 'Rapport de la position', html: body, ok: 'Fermer' });
+  }
+  function infoBox({ title, html, ok = 'Fermer' }) {
+    const bg = document.createElement('div'); bg.className = 'modal-bg';
+    bg.innerHTML = `<div class="modal card" role="dialog" aria-modal="true" style="width:min(560px,100%)"><h3>${esc(title)}</h3>${html}<div class="macts" style="margin-top:14px"><button class="btn primary" id="m-ok">${esc(ok)}</button></div></div>`;
+    document.body.appendChild(bg);
+    const close = () => { bg.remove(); document.removeEventListener('keydown', onKey); };
+    const onKey = (e) => { if (e.key === 'Escape' || e.key === 'Enter') close(); };
+    document.addEventListener('keydown', onKey);
+    bg.querySelector('#m-ok').onclick = close;
+    bg.addEventListener('mousedown', (e) => { if (e.target === bg) close(); });
+    setTimeout(() => bg.querySelector('#m-ok').focus(), 0);
+  }
+  window.openScore = (ts) => { const sc = scoreStore.find(x => x.ts === ts); if (sc) openReport(sc); };
+
+  let wasScoring = false;
   function renderAi(s) {
     const j = s.journal;
-    const st = $('jrnStatus'), btn = $('jrnSyncBtn'), box = $('ai');
+    const st = $('jrnStatus'), btn = $('jrnSyncBtn'), box = $('ai'), list = $('scores');
     if (!j || !j.enabled) {
       st.textContent = 'journal non relié';
-      btn.style.display = 'none';
+      btn.style.display = 'none'; list.innerHTML = '';
       box.innerHTML = '<div class="empty" style="margin:0">Colle ta clé Edge dans config.json pour relier le journal : trades clôturés ajoutés automatiquement et avis IA à chaque entrée.</div>';
       return;
     }
@@ -1126,28 +1225,22 @@
       : ls ? (ls.error ? '⚠ synchro en échec' : `journal à jour · ${ago(ls.at)}${ls.inserted ? ` · +${ls.inserted}` : ''}`)
       : 'journal relié';
     st.title = ls ? (ls.error ? ls.error : `Dernière synchro il y a ${ago(ls.at)} : ${ls.inserted} trade(s) ajouté(s), ${ls.updated} mis à jour${ls.hint ? '\n' + ls.hint : ''}`) : 'Les trades clôturés sont ajoutés au journal automatiquement (8 s après la clôture).';
+    scoreStore = j.scores || (j.lastScore ? [j.lastScore] : []);
     const sc = j.lastScore;
-    if (!sc) {
-      box.innerHTML = j.scoring
-        ? '<div class="empty pulsing" style="margin:0">Analyse de ton entrée en cours…</div>'
-        : '<div class="empty" style="margin:0">À chaque prise de position (panneau ou Tradovate), l’IA note l’entrée sur 100 à partir de ton historique et de ses analyses.</div>';
-      return;
-    }
-    const e = sc.entry || {};
-    const meta = `${e.action === 'Sell' ? 'VENTE' : 'ACHAT'} ${e.qty || ''} ${esc(e.symbol || '')}${e.price ? ' @ ' + e.price : ''} · ${fmtTime(sc.ts)} · ${esc(e.source || '')}${sc.ms ? ` · ${(sc.ms / 1000).toFixed(1)} s` : ''}`;
-    if (sc.error) {
-      box.innerHTML = `<div class="empty" style="margin:0;color:var(--amber)">Avis IA indisponible — ${esc(sc.error)}</div><div class="meta">${meta}</div>`;
-    } else {
-      box.innerHTML = `<div class="score"><div class="n ${esc(sc.verdict || '')}">${sc.score}<small>/100</small></div><div><div class="h">${esc(sc.headline || '')}</div><div class="meta">${meta}</div></div></div>`
-        + ((sc.reasons || []).length ? '<ul>' + sc.reasons.map(r => `<li>${esc(r)}</li>`).join('') + '</ul>' : '')
-        + (sc.warning ? `<div class="warn">${ico('alert')}<span>${esc(sc.warning)}</span></div>` : '')
-        + (j.scoring ? '<div class="meta pulsing">nouvelle analyse en cours…</div>' : '');
-    }
-    // Notification (hors bandeau) sur tout NOUVEL avis — pas sur celui déjà affiché au chargement.
-    if (lastScoreTs === null) lastScoreTs = sc.ts;
+    box.innerHTML = sc
+      ? `<div class="meta">Dernier avis : <b style="color:var(--txt)">${sc.error ? 'indisponible' : sc.score + ' % · ' + (VERDICT[sc.verdict] || '')}</b> · ${entryMeta(sc)}</div>`
+      : `<div class="empty" style="margin:0">À chaque prise de position (panneau ou Tradovate), une pastille apparaît avec la note de l’entrée sur 100. Clique dessus pour le rapport.</div>`;
+    list.innerHTML = scoreStore.map(x => { const e = x.entry || {}; const v = x.error ? 'err' : (x.verdict || 'caution'); return `<span class="sc ${v}" onclick="openScore(${x.ts})" title="${esc(x.headline || x.error || '')}"><b>${x.error ? '?' : x.score + '%'}</b>${e.action === 'Sell' ? 'V' : 'A'} ${esc(e.symbol || '')} · ${fmtTime(x.ts)}</span>`; }).join('');
+    // Pastille : « en cours » pendant l'analyse, puis pop du résultat (pas au chargement de la page).
+    if (j.scoring && !wasScoring) showPill(null, true);
+    wasScoring = !!j.scoring;
+    if (!sc) return;
+    if (lastScoreTs === null) { lastScoreTs = sc.ts; if (Date.now() - sc.ts < 120000) showPill(sc); }
     else if (sc.ts !== lastScoreTs) {
       lastScoreTs = sc.ts;
-      if (!sc.error) { notify(`Avis IA ${sc.score}/100 — ${e.action === 'Sell' ? 'vente' : 'achat'} ${e.symbol || ''}`, sc.headline || ''); beep('ok'); }
+      showPill(sc);
+      const e = sc.entry || {};
+      if (!sc.error) { notify(`Avis IA ${sc.score} % — ${e.action === 'Sell' ? 'vente' : 'achat'} ${e.symbol || ''}`, sc.headline || ''); beep('ok'); }
     }
   }
   $('jrnSyncBtn').onclick = async () => {

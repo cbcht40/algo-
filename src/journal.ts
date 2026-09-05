@@ -27,6 +27,8 @@ export interface ScoreResult {
   score?: number;
   verdict?: "go" | "caution" | "avoid";
   headline?: string;
+  /** Paragraphe d'explication de la note (le « petit rapport » de la position). */
+  report?: string;
   reasons?: string[];
   warning?: string | null;
   error?: string;
@@ -136,7 +138,7 @@ export class JournalLink {
       });
       const d = (await r.json().catch(() => ({}))) as Record<string, any>;
       const res: ScoreResult = r.ok && d.ok
-        ? { ts: Date.now(), entry: req, score: d.score, verdict: d.verdict, headline: d.headline, reasons: d.reasons, warning: d.warning, ms: Date.now() - started, context: d.context }
+        ? { ts: Date.now(), entry: req, score: d.score, verdict: d.verdict, headline: d.headline, report: d.report, reasons: d.reasons, warning: d.warning, ms: Date.now() - started, context: d.context }
         : { ts: Date.now(), entry: req, error: String(d.error || `HTTP ${r.status}`), ms: Date.now() - started };
       this.lastScore = res;
       this.history = [res, ...this.history].slice(0, 20);
