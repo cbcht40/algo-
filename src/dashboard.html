@@ -270,6 +270,17 @@
   .techlog { margin:0 12px 12px; background:#0d0d15; border:1px solid var(--border); border-radius:9px; padding:12px 14px; font-family:var(--mono); font-size:11.5px; line-height:1.55; color:var(--txt2); max-height:280px; overflow:auto; white-space:pre-wrap; word-break:break-word; }
   .techlog .lv-error { color:var(--red); } .techlog .lv-warn { color:var(--amber); }
 
+  /* ── confirmations ─────────────────────────────────────────────────────── */
+  .modal-bg { position:fixed; inset:0; z-index:100; background:rgba(5,5,10,.55); -webkit-backdrop-filter:blur(6px); backdrop-filter:blur(6px); display:flex; align-items:center; justify-content:center; padding:20px; animation:fadein .12s ease; }
+  @keyframes fadein { from { opacity:0; } to { opacity:1; } }
+  .modal { width:min(520px, 100%); padding:22px 24px 18px; border-color:rgba(124,116,255,.45); box-shadow:0 0 0 1px rgba(124,116,255,.2), 0 24px 70px rgba(0,0,0,.6); }
+  .modal h3 { font-family:var(--display); font-size:17px; font-weight:700; letter-spacing:-.01em; margin-bottom:10px; }
+  .modal p { font-size:13.5px; line-height:1.55; color:var(--txt2); white-space:pre-wrap; margin-bottom:14px; }
+  .modal .mchk { display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--txt3); margin-bottom:16px; cursor:pointer; }
+  .modal .mchk input { accent-color:var(--accent); }
+  .modal .macts { display:flex; justify-content:flex-end; gap:10px; }
+  .btn.danger.solid { background:var(--neon-red); color:#fff; border-color:transparent; box-shadow:inset 0 1px 0 rgba(255,255,255,.2), 0 4px 18px rgba(242,110,138,.35); }
+  .btn.danger.solid:hover { filter:brightness(1.08); background:var(--neon-red); }
   .toast { position:fixed; left:50%; bottom:26px; transform:translateX(-50%) translateY(20px); background:#16161f; border:1px solid var(--border2); color:var(--txt); font-family:var(--mono); font-size:13px; padding:11px 18px; border-radius:10px; opacity:0; pointer-events:none; transition:opacity .25s, transform .25s; z-index:50; box-shadow:0 8px 30px rgba(0,0,0,.5); max-width:80vw; }
   .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
   .offline { text-align:center; padding:60px 20px; color:var(--txt2); }
@@ -380,6 +391,7 @@
 
         <div class="tk-foot">
           <label class="opt" title="Demande une confirmation avant chaque envoi d'ordre"><input type="checkbox" id="confirm" checked /> Confirmer avant d'envoyer</label>
+          <button class="btn sm" id="skipInfo" style="display:none" title="Réaffiche toutes les confirmations que tu as masquées avec « Ne plus afficher ce message »"></button>
           <span class="sp"></span>
           <button class="btn sm" id="cancelAllBtn" title="Annule tous les ordres en attente (entrées, stops, objectifs) sur tous les comptes"><svg class="i"><use href="#i-ban"/></svg>Annuler les ordres</button>
         </div>
@@ -429,6 +441,42 @@
     t.textContent = msg; t.classList.add('show');
     clearTimeout(t._timer); t._timer = setTimeout(() => t.classList.remove('show'), 4500);
   }
+  // ── confirmations maison, avec « Ne plus afficher ce message » (mémorisé par type) ──
+  let SKIP = {};
+  try { SKIP = JSON.parse(localStorage.getItem('ltc.skip') || '{}') || {}; } catch (_) {}
+  function saveSkip() { try { localStorage.setItem('ltc.skip', JSON.stringify(SKIP)); } catch (_) {} renderSkipInfo(); }
+  function renderSkipInfo() {
+    const n = Object.keys(SKIP).filter(k => SKIP[k]).length;
+    const b = $('skipInfo'); if (!b) return;
+    b.style.display = n ? '' : 'none';
+    b.textContent = `Réafficher ${n} message${n > 1 ? 's' : ''} masqué${n > 1 ? 's' : ''}`;
+  }
+  /** Boîte de confirmation. `key` → case « Ne plus afficher » persistée ; `onSkip` remplace
+   *  la mémorisation par une action (ex. décocher « Confirmer avant d'envoyer »). */
+  function confirmBox({ key, title, body, ok = 'OK', cancel = 'Annuler', danger = false, skipLabel = 'Ne plus afficher ce message', onSkip = null }) {
+    if (key && SKIP[key] && !onSkip) return Promise.resolve(true);
+    return new Promise((resolve) => {
+      const bg = document.createElement('div'); bg.className = 'modal-bg';
+      bg.innerHTML = `<div class="modal card" role="dialog" aria-modal="true">
+        <h3>${esc(title)}</h3>
+        <p>${esc(body)}</p>
+        ${key ? `<label class="mchk"><input type="checkbox" id="m-skip"> ${esc(skipLabel)}</label>` : ''}
+        <div class="macts"><button class="btn" id="m-cancel">${esc(cancel)}</button><button class="btn ${danger ? 'danger solid' : 'primary'}" id="m-ok">${esc(ok)}</button></div>
+      </div>`;
+      document.body.appendChild(bg);
+      const onKey = (e) => { if (e.key === 'Escape') done(false); else if (e.key === 'Enter') { e.preventDefault(); done(true); } };
+      const done = (v) => {
+        if (v && key) { const c = bg.querySelector('#m-skip'); if (c && c.checked) { if (onSkip) onSkip(); else { SKIP[key] = true; saveSkip(); } } }
+        bg.remove(); document.removeEventListener('keydown', onKey); resolve(v);
+      };
+      document.addEventListener('keydown', onKey);
+      bg.querySelector('#m-cancel').onclick = () => done(false);
+      bg.querySelector('#m-ok').onclick = () => done(true);
+      bg.addEventListener('mousedown', (e) => { if (e.target === bg) done(false); });
+      setTimeout(() => { const b = bg.querySelector('#m-ok'); if (b) b.focus(); }, 0);
+    });
+  }
+
   const fmtPx = (p, dec) => (p == null || !isFinite(p)) ? '—' : Number(p).toLocaleString('fr-FR', { minimumFractionDigits: dec ?? 2, maximumFractionDigits: dec ?? 2 });
   const fmtMoney = (v) => Number(v).toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 }) + ' $';
   const decOf = (tick) => { const s = String(tick || 0.01); return (s.split('.')[1] || '').length; };
@@ -594,12 +642,20 @@
     if (S.type === 'Stop') body.stopPrice = price;
     if (S.brk && (S.stopTicks > 0 || S.targetTicks > 0)) body.bracket = { stopTicks: S.stopTicks || undefined, targetTicks: S.targetTicks || undefined };
     if (S.confirm) {
-      const lines = [`${action === 'Buy' ? 'ACHETER' : 'VENDRE'} ${S.qty} ${sym} ${S.type === 'Market' ? 'au marché' : (S.type === 'Limit' ? 'limite @' + price : 'stop @' + price)}`,
-        '', `${t.ready.length} compte(s) · ${t.lots} lot(s) au total :`, ...t.ready.map(r => `  • ${r.a.label} × ${r.q}`)];
+      const lines = [`${t.ready.length} compte(s) · ${t.lots} lot(s) au total :`, ...t.ready.map(r => `  • ${r.a.label} × ${r.q}`)];
       if (body.bracket) lines.push('', `Stop ${S.stopTicks || '—'} ticks · Objectif ${S.targetTicks || '—'} ticks (posés au fill)`);
       if (t.off.length) lines.push('', `Ignorés (déconnectés) : ${t.off.map(a => a.label).join(', ')}`);
       if (lastState && lastState.dryRun) lines.push('', 'MODE SIMULATION : aucun ordre réel.');
-      if (!window.confirm(lines.join('\n'))) return;
+      const okc = await confirmBox({
+        key: 'order',
+        title: `${action === 'Buy' ? 'ACHETER' : 'VENDRE'} ${S.qty} ${sym} ${S.type === 'Market' ? 'au marché' : (S.type === 'Limit' ? 'limite @' + price : 'stop @' + price)}`,
+        body: lines.join('\n'),
+        ok: action === 'Buy' ? 'Acheter' : 'Vendre',
+        danger: action === 'Sell',
+        skipLabel: 'Ne plus demander (désactive « Confirmer avant d’envoyer »)',
+        onSkip: () => { S.confirm = false; $('confirm').checked = false; saveS(); },
+      });
+      if (!okc) return;
     }
     sending = true; updateTicket();
     const res = $('result'); res.className = 'result show'; res.textContent = 'Envoi en cours…';
@@ -633,15 +689,15 @@
   };
   $('relayBtn').onclick = async () => {
     const on = !(lastState && lastState.relay && lastState.relay.enabled);
-    if (!on && !window.confirm('Désactiver le relais Tradovate ?\n\nTes ordres passés dans le navigateur ne seront plus répercutés sur les autres comptes (le panneau d’ordre reste utilisable).')) return;
+    if (!on && !(await confirmBox({ key: 'relayOff', title: 'Désactiver le relais Tradovate ?', body: 'Tes ordres passés dans le navigateur ne seront plus répercutés sur les autres comptes (le panneau d’ordre reste utilisable).', ok: 'Désactiver' }))) return;
     try { await post('/api/relay', { enabled: on }); showToast(on ? '⚡ Relais Tradovate activé' : 'Relais Tradovate désactivé'); } catch (_) { showToast('Serveur injoignable'); }
     refresh();
   };
   $('flatAllBtn').onclick = async () => {
     const s = lastState; if (!s) return;
     const openPos = s.accounts.reduce((n, a) => n + (a.positions || []).length, 0);
-    const msg = 'TOUT À PLAT — mise à plat d’urgence\n\nSur TOUS les comptes :\n• annuler TOUS les ordres en attente (entrées, stops, objectifs)\n• CLÔTURER toutes les positions ouvertes AU MARCHÉ' + (openPos ? `\n\n(${openPos} position(s) ouverte(s) actuellement)` : '') + '\n\nContinuer ?';
-    if (!window.confirm(msg)) return;
+    const msg = 'Sur TOUS les comptes :\n• annuler TOUS les ordres en attente (entrées, stops, objectifs)\n• CLÔTURER toutes les positions ouvertes AU MARCHÉ' + (openPos ? `\n\n(${openPos} position(s) ouverte(s) actuellement)` : '');
+    if (!(await confirmBox({ key: 'flattenAll', title: 'Tout à plat — mise à plat d’urgence', body: msg, ok: 'Tout mettre à plat', danger: true }))) return;
     const b = $('flatAllBtn'); b.disabled = true;
     try {
       const d = await post('/api/flatten', {});
@@ -651,7 +707,7 @@
     b.disabled = false; refresh();
   };
   $('cancelAllBtn').onclick = async () => {
-    if (!window.confirm('Annuler TOUS les ordres en attente sur tous les comptes ?\n\n(entrées limite/stop, stops et objectifs — les positions restent ouvertes, SANS protection)')) return;
+    if (!(await confirmBox({ key: 'cancelAll', title: 'Annuler TOUS les ordres en attente ?', body: 'Sur tous les comptes : entrées limite/stop, stops et objectifs.\nLes positions restent ouvertes, SANS protection.', ok: 'Tout annuler', danger: true }))) return;
     try { const d = await post('/api/cancel-all', {}); showToast(d.error ? 'Échec : ' + d.error : `✓ ${d.canceled} ordre(s) annulé(s)` + (d.errors && d.errors.length ? ` · ⚠ ${d.errors.length} erreur(s)` : '')); }
     catch (_) { showToast('Serveur injoignable'); }
     refresh();
@@ -707,11 +763,11 @@
     } catch (_) { showToast('Serveur injoignable'); }
     await refresh();
   }
-  window.setEnabled = (spec, on) => {
+  window.setEnabled = async (spec, on) => {
     const s = lastState;
     const a = s && s.accounts.find(x => (x.spec || x.label) === spec);
     if (!on && a && (a.positions || []).length) {
-      if (!window.confirm(`« ${a.label} » a une position OUVERTE.\n\nHors groupe, il ne recevra plus les ordres du panneau (ni les sorties). Sa position reste à gérer à part (ses stops/objectifs déjà posés restent actifs).\n\nExclure quand même ?`)) { refresh(); return; }
+      if (!(await confirmBox({ key: 'disableOpen', title: `« ${a.label} » a une position OUVERTE`, body: 'Hors groupe, il ne recevra plus les ordres du panneau ni du relais (y compris les sorties). Sa position reste à gérer à part — ses stops/objectifs déjà posés restent actifs.\n\nExclure quand même ?', ok: 'Exclure' }))) { refresh(); return; }
     }
     patchAccount(spec, { enabled: on }, on ? `✓ ${spec} dans le groupe` : `${spec} hors groupe`);
   };
@@ -721,13 +777,13 @@
     patchAccount(spec, { multiplier: v }, `✓ ${spec} → ×${v}`);
   };
   window.flattenOne = async (spec, label) => {
-    if (!window.confirm(`Mettre « ${label} » à plat ?\n\n• annule ses ordres en attente\n• clôture ses positions AU MARCHÉ`)) return;
+    if (!(await confirmBox({ key: 'flattenOne', title: `Mettre « ${label} » à plat ?`, body: '• annule ses ordres en attente\n• clôture ses positions AU MARCHÉ', ok: 'Mettre à plat', danger: true }))) return;
     try { const d = await post('/api/flatten', { spec }); showToast(d.error ? 'Échec : ' + d.error : `✓ ${label} : ${d.canceled} ordre(s) annulé(s) · ${d.flattened} position(s) clôturée(s)` + (d.errors && d.errors.length ? ` · ⚠ ${d.errors.join(' ; ')}` : '')); }
     catch (_) { showToast('Serveur injoignable'); }
     refresh();
   };
   window.cancelOne = async (spec, label) => {
-    if (!window.confirm(`Annuler les ordres en attente de « ${label} » ?\n\n(sa position, si ouverte, restera SANS protection)`)) return;
+    if (!(await confirmBox({ key: 'cancelOne', title: `Annuler les ordres en attente de « ${label} » ?`, body: 'Sa position, si ouverte, restera SANS protection.', ok: 'Annuler les ordres', danger: true }))) return;
     try { const d = await post('/api/cancel-all', { spec }); showToast(d.error ? 'Échec : ' + d.error : `✓ ${label} : ${d.canceled} ordre(s) annulé(s)`); }
     catch (_) { showToast('Serveur injoignable'); }
     refresh();
@@ -744,8 +800,8 @@
   };
   window.removeOne = async (spec, label) => {
     const a = lastState && lastState.accounts.find(x => (x.spec || x.label) === spec);
-    if (a && (a.positions || []).length && !window.confirm(`« ${label} » a une position OUVERTE.\n\nRetiré du copieur, sa position et ses ordres restent tels quels sur Tradovate, à gérer à la main.\n\nRetirer quand même ?`)) return;
-    if (!window.confirm(`Retirer « ${label} » du copieur ?\n\nIl ne recevra plus aucun ordre, et « Comptes » ne le ré-ajoutera pas. (Ton compte Tradovate n’est pas touché.)`)) return;
+    if (a && (a.positions || []).length && !(await confirmBox({ key: 'removeOpen', title: `« ${label} » a une position OUVERTE`, body: 'Retiré du copieur, sa position et ses ordres restent tels quels sur Tradovate, à gérer à la main.\n\nRetirer quand même ?', ok: 'Retirer', danger: true }))) return;
+    if (!(await confirmBox({ key: 'remove', title: `Retirer « ${label} » du copieur ?`, body: 'Il ne recevra plus aucun ordre, et « Comptes » ne le ré-ajoutera pas. (Ton compte Tradovate n’est pas touché.)', ok: 'Retirer', danger: true }))) return;
     try { const d = await post('/api/remove', { spec }); showToast(d.ok ? `✕ ${label} retiré` : 'Échec : ' + (d.error || 'erreur')); }
     catch (_) { showToast('Serveur injoignable'); }
     refresh();
@@ -814,7 +870,7 @@
     refresh();
   };
   window.cancelExit = async (key) => {
-    if (!window.confirm('Annuler ces ordres sur tous les comptes ?\n\nLes positions resteront ouvertes SANS cette protection.')) return;
+    if (!(await confirmBox({ key: 'cancelExit', title: 'Annuler ces ordres sur tous les comptes ?', body: 'Les positions resteront ouvertes SANS cette protection.', ok: 'Annuler les ordres', danger: true }))) return;
     try { const d = await post('/api/exits/cancel', { key }); showToast(d.ok ? `✓ ${d.canceled} ordre(s) annulé(s)` : `⚠ ${(d.errors || []).join(' ; ')}`); }
     catch (_) { showToast('Serveur injoignable'); }
     refresh();
@@ -988,6 +1044,8 @@
   $('brk').checked = S.brk; $('brkBody').classList.toggle('off', !S.brk);
   $('stopTicks').value = S.stopTicks; $('targetTicks').value = S.targetTicks;
   $('confirm').checked = S.confirm;
+  $('skipInfo').onclick = () => { SKIP = {}; saveSkip(); showToast('✓ Toutes les confirmations sont réaffichées'); };
+  renderSkipInfo();
   if (S.sym) { $('sym').value = S.sym; }
   renderRecents(); updateTicket();
   $('offline').style.display = ''; $('main').style.display = 'none';
