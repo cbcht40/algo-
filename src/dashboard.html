@@ -122,6 +122,11 @@
   .tfs { margin:0; gap:4px; }
   .tfs .chip { padding:3px 8px; font-size:10.5px; }
   .chart-hint { position:absolute; right:10px; bottom:26px; z-index:2; font-family:var(--mono); font-size:10.5px; color:var(--txt3); pointer-events:none; }
+  .chart-wrap.grab { cursor:ns-resize; }
+  .chart-wrap.dragging { cursor:grabbing; }
+  .drag-label { position:absolute; right:74px; z-index:4; transform:translateY(-50%); pointer-events:none; font-family:var(--mono); font-size:11.5px; font-weight:700; padding:4px 9px; border-radius:7px; background:#16161f; border:1px solid var(--border2); color:var(--txt); box-shadow:0 6px 20px rgba(0,0,0,.5); white-space:nowrap; display:none; }
+  .drag-label.stop { border-color:rgba(242,110,138,.6); } .drag-label.target { border-color:rgba(79,124,255,.6); }
+  .drag-label small { color:var(--txt3); font-weight:600; margin-left:6px; }
 
   /* ── journal & avis IA ─────────────────────────────────────────────────── */
   .ai { padding:0 16px 14px; }
@@ -475,6 +480,8 @@
         <div class="chart-wrap">
           <div id="chart"></div>
           <div class="legend" id="legend"></div>
+          <div class="drag-label" id="dragLabel"></div>
+          <div class="chart-hint" id="chartHint"></div>
           <div class="chart-empty" id="chartEmpty">Choisis un instrument dans le panneau.</div>
         </div>
       </section>
@@ -1180,7 +1187,7 @@
     });
     // Clic sur le graphique en Limite/Stop → le prix cliqué remplit le panneau.
     chart.subscribeClick((p) => {
-      if (S.type === 'Market' || !p || !p.point) return;
+      if (justDragged || S.type === 'Market' || !p || !p.point) return;
       const price = candles.coordinateToPrice(p.point.y);
       if (price != null && isFinite(price)) { fillPrice(inst ? Math.round(price / inst.tickSize) * inst.tickSize : price); showToast(`Prix ${S.type === 'Limit' ? 'limite' : 'stop'} = ${fmtPx(Number($('price').value), inst ? decOf(inst.tickSize) : 2)}`); }
     });
@@ -1214,21 +1221,93 @@
     updateChartLines();
   }
   // Lignes de prix : entrée moyenne de chaque compte (position) + stops/objectifs du groupe.
+  // Les stops/objectifs sont DÉPLAÇABLES à la souris (voir plus bas) → on garde leur handle.
+  let dragLines = [];
   function updateChartLines() {
-    if (!candles || !chartSymNow || !lastState) return;
+    if (!candles || !chartSymNow || !lastState || chartDrag) return;
     for (const l of priceLines) { try { candles.removePriceLine(l); } catch (_) {} }
-    priceLines = [];
-    const add = (price, color, title, style) => { try { priceLines.push(candles.createPriceLine({ price, color, lineWidth: 1, lineStyle: style, axisLabelVisible: true, title })); } catch (_) {} };
+    priceLines = []; dragLines = [];
+    const add = (price, color, title, style, width) => { try { const l = candles.createPriceLine({ price, color, lineWidth: width || 1, lineStyle: style, axisLabelVisible: true, title }); priceLines.push(l); return l; } catch (_) { return null; } };
     const pos = new Map();
     for (const a of lastState.accounts) for (const p of (a.positions || [])) if (p.symbol === chartSymNow && p.netPos && p.netPrice) { const k = `${p.netPos > 0 ? 'L' : 'S'}|${p.netPrice}`; pos.set(k, (pos.get(k) || 0) + 1); }
     for (const [k, n] of pos) { const [side, px] = k.split('|'); add(Number(px), side === 'L' ? '#4f7cff' : '#f26e8a', `${side === 'L' ? 'LONG' : 'SHORT'}${n > 1 ? ' ×' + n : ''}`, 0); }
+    let nExits = 0;
     for (const g of (lastState.exits || [])) {
       if (g.symbol !== chartSymNow) continue;
       const byPx = new Map();
       for (const a of g.accounts) byPx.set(a.price, (byPx.get(a.price) || 0) + 1);
-      for (const [px, n] of byPx) add(px, g.role === 'stop' ? '#f26e8a' : '#4f7cff', `${g.role === 'stop' ? 'STOP' : 'OBJ'}${n > 1 ? ' ×' + n : ''}`, 2);
+      for (const [px, n] of byPx) {
+        const line = add(px, g.role === 'stop' ? '#f26e8a' : '#4f7cff', `${g.role === 'stop' ? 'STOP' : 'OBJ'}${n > 1 ? ' ×' + n : ''}`, 2, 2);
+        if (line) { dragLines.push({ key: g.key, role: g.role, price: px, count: n, total: g.count, line }); nExits++; }
+      }
     }
+    $('chartHint').textContent = nExits ? 'glisse un stop ou un objectif pour le déplacer sur tous les comptes' : '';
   }
+
+  // ── glisser-déposer des stops / objectifs sur le graphique ───────────────────
+  let chartDrag = null, justDragged = false;
+  const wrap = document.querySelector('.chart-wrap');
+  function lineNear(y) {
+    let best = null;
+    for (const l of dragLines) {
+      const ly = candles.priceToCoordinate(l.price);
+      if (ly == null) continue;
+      const d = Math.abs(ly - y);
+      if (d <= 8 && (!best || d < best.d)) best = { ...l, d };
+    }
+    return best;
+  }
+  function snap(price) { return inst ? Math.round(price / inst.tickSize) * inst.tickSize : price; }
+  function dragLabel(l, price) {
+    const el = $('dragLabel');
+    const dec = inst ? decOf(inst.tickSize) : 2;
+    const dTicks = inst ? Math.round((price - l.price) / inst.tickSize) : null;
+    el.className = `drag-label ${l.role}`;
+    el.style.display = 'block';
+    el.style.top = (candles.priceToCoordinate(price) || 0) + 'px';
+    el.innerHTML = `${l.role === 'stop' ? 'STOP' : 'OBJECTIF'} → ${fmtPx(price, dec)}<small>${dTicks != null ? (dTicks > 0 ? '+' : '') + dTicks + ' tick' + (Math.abs(dTicks) > 1 ? 's' : '') : ''} · ${l.total} compte${l.total > 1 ? 's' : ''}</small>`;
+  }
+  $('chart').addEventListener('pointerdown', (e) => {
+    if (!candles || !dragLines.length || e.button !== 0) return;
+    const l = lineNear(e.offsetY);
+    if (!l) return;
+    chartDrag = { ...l, current: l.price, pointerId: e.pointerId };
+    chart.applyOptions({ handleScroll: false, handleScale: false });
+    wrap.classList.add('dragging');
+    try { $('chart').setPointerCapture(e.pointerId); } catch (_) {}
+    dragLabel(l, l.price);
+    e.preventDefault();
+  });
+  $('chart').addEventListener('pointermove', (e) => {
+    if (!candles) return;
+    if (!chartDrag) { wrap.classList.toggle('grab', !!(dragLines.length && lineNear(e.offsetY))); return; }
+    const raw = candles.coordinateToPrice(e.offsetY);
+    if (raw == null || !isFinite(raw)) return;
+    const price = snap(raw);
+    if (price === chartDrag.current) return;
+    chartDrag.current = price;
+    try { chartDrag.line.applyOptions({ price }); } catch (_) {}
+    dragLabel(chartDrag, price);
+  });
+  async function endDrag(e) {
+    if (!chartDrag) return;
+    const d = chartDrag; chartDrag = null;
+    chart.applyOptions({ handleScroll: true, handleScale: true });
+    wrap.classList.remove('dragging'); $('dragLabel').style.display = 'none';
+    try { $('chart').releasePointerCapture(d.pointerId); } catch (_) {}
+    justDragged = true; setTimeout(() => { justDragged = false; }, 350);
+    if (d.current === d.price) return;
+    const dec = inst ? decOf(inst.tickSize) : 2;
+    try {
+      const r = await post('/api/exits/modify', { key: d.key, price: d.current });
+      if (r.ok) { showToast(`✓ ${d.role === 'stop' ? 'Stop' : 'Objectif'} déplacé à ${fmtPx(d.current, dec)} sur ${r.modified} compte${r.modified > 1 ? 's' : ''}`); beep('ok'); }
+      else { showToast(`⚠ ${r.modified || 0} déplacé(s) · ${(r.errors || []).join(' ; ')}`); try { d.line.applyOptions({ price: d.price }); } catch (_) {} }
+    } catch (_) { showToast('Serveur injoignable'); try { d.line.applyOptions({ price: d.price }); } catch (_) {} }
+    refresh();
+  }
+  $('chart').addEventListener('pointerup', endDrag);
+  $('chart').addEventListener('pointercancel', endDrag);
+  $('chart').addEventListener('lostpointercapture', () => { if (chartDrag) endDrag(); });
   renderTfs();
   setInterval(loadChart, 2000);
 
