@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Let Trade Copieur — Connecteur",
-  "version": "1.1.0",
-  "description": "Capte automatiquement le token de ta session Tradovate et l'envoie au copieur local. Zéro copier-coller.",
+  "version": "1.2.0",
+  "description": "Capte ta session Tradovate et relaie tes ordres au copieur local à l'instant où ils partent — les autres comptes suivent en même temps. Rien ne quitte ta machine.",
   "permissions": ["webRequest", "storage", "alarms"],
   "host_permissions": [
     "https://*.tradovateapi.com/*",

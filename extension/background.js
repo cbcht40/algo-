@@ -103,6 +103,24 @@ chrome.runtime.onMessage.addListener((msg, _sender, reply) => {
     onToken(msg.token);
     return; // no async reply needed
   }
+  // Ordre intercepté dans la page (relais) — chemin de secours quand le content script
+  // n'a pas pu joindre le copieur en direct. Réponse immédiate, envoi en fond.
+  if (msg && msg.type === "relay" && msg.relay) {
+    fetch(`${COPIER}/relay`, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain" },
+      body: JSON.stringify(msg.relay),
+      keepalive: true,
+    }).catch(() => {});
+    reply({ ok: true });
+    return true;
+  }
+  // Keep-alive : tant qu'un onglet Tradovate est ouvert, le content script nous pingue
+  // → le service worker reste chaud (pas de démarrage à froid au moment d'un ordre).
+  if (msg === "ping") {
+    reply({ ok: true });
+    return true;
+  }
   if (msg === "resend") {
     Promise.all(Object.keys(tokens).map(send)).then(() => reply({ ok: true }));
     return true; // async reply

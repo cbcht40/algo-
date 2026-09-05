@@ -100,6 +100,9 @@ export function startDashboard(engine: GroupEngine, port = 7879): void {
           case "/api/lock":
             engine.setLocked(!!p.locked);
             return json(200, { locked: engine.isLocked });
+          case "/api/relay":
+            engine.setRelay(!!p.enabled);
+            return json(200, { enabled: engine.isRelayEnabled });
           case "/api/account": {
             if (p.multiplier !== undefined && typeof p.multiplier !== "number") return json(400, { ok: false, error: "Multiplicateur invalide (0 à 100)." });
             const r = engine.setAccountSettings(String(p.spec || ""), {

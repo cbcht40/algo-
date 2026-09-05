@@ -183,8 +183,8 @@ const ERROR_HTML =
 
 async function createWindow() {
   win = new BrowserWindow({
-    width: 1100,
-    height: 840,
+    width: 1180,
+    height: 860,
     minWidth: 760,
     minHeight: 600,
     backgroundColor: '#0a0a10',

@@ -11,6 +11,19 @@ se déplacent **pour tout le groupe en un clic**.
 > ⚠️ Outil de trading qui envoie de vrais ordres. Commence **toujours** en `demo` +
 > `dryRun: true`. Tu es responsable du respect des règles de ta/tes prop firm(s).
 
+**Deux façons d'entrer, même résultat :**
+
+| | Comment | Latence entre comptes |
+|---|---|---|
+| **Relais Tradovate** (défaut, activé) | Tu trades **dans Tradovate** (chart, DOM, brackets…) sur n'importe quel compte du groupe. L'extension intercepte l'ordre **à l'instant où ton navigateur l'envoie** et le Copieur le tire sur les autres comptes. | quelques ms (navigateur → copieur → Tradovate, en parallèle de ton propre ordre) |
+| **Panneau d'ordre** du Copieur | Tu cliques ACHETER / VENDRE dans l'app. | ≈ 0 (trames envoyées dos à dos) |
+
+Le relais suit aussi tes **modifications** (stop déplacé sur le chart), **annulations** et
+**clôtures** faites dans Tradovate : mapping exact via l'orderId (réponse relayée par
+l'extension), sinon par correspondance contrat + sens + type sur chaque compte. Les
+brackets natifs Tradovate (stratégie) sont relayés tels quels, quantités rescalées.
+Le relais ne voit que le **navigateur** (pas l'app mobile / desktop Tradovate).
+
 ---
 
 ## 0. Démarrage (app)

@@ -50,7 +50,8 @@
     box-shadow:inset 0 1px 0 rgba(255,255,255,.05), 0 4px 16px rgba(0,0,0,.35); }
   .card::before { content:''; position:absolute; inset:0; border-radius:inherit; background:var(--glass-hi); pointer-events:none; }
   .card > * { position:relative; }
-  .card-h { display:flex; align-items:center; gap:10px; font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--txt3); padding:14px 18px 10px; }
+  .card-h { display:flex; align-items:center; gap:10px; font-family:var(--mono); font-size:11px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; color:var(--txt3); padding:14px 18px 10px; white-space:nowrap; min-width:0; }
+  .card-h .cnt { overflow:hidden; text-overflow:ellipsis; }
   .card-h::before { content:''; display:inline-block; width:10px; height:1px; background:var(--accent2); box-shadow:0 0 8px var(--accent2); }
   .card-h .sp { flex:1; }
   .card-h .cnt { color:var(--txt2); letter-spacing:0; }
@@ -80,6 +81,8 @@
   .btn.danger { color:var(--red); border-color:rgba(242,110,138,.5); background:transparent; }
   .btn.danger:hover { background:var(--red); color:#fff; border-color:var(--red); }
   .btn.lock.on { color:var(--amber); border-color:rgba(251,191,36,.5); background:rgba(251,191,36,.08); }
+  .btn.relay.on { color:var(--accent2); border-color:rgba(79,124,255,.55); background:rgba(79,124,255,.1); box-shadow:0 0 14px rgba(79,124,255,.25); }
+  .btn.relay.on svg { filter:drop-shadow(0 0 6px rgba(79,124,255,.9)); }
   .btn.primary { background:var(--neon); color:#fff; border-color:transparent; box-shadow:inset 0 1px 0 rgba(255,255,255,.22), 0 4px 18px rgba(99,91,255,.36); }
   .btn.primary:hover { filter:brightness(1.08); }
   .btn.sm { padding:6px 10px; font-size:11px; }
@@ -305,8 +308,9 @@
     </div>
     <div class="sp"></div>
     <div class="conn" id="conn"><span class="dot"></span>connexion…</div>
-    <button class="btn" id="rescanBtn" title="Détecte les comptes nouvellement ouverts sur tes logins Tradovate connectés"><svg class="i"><use href="#i-search"/></svg>Nouveaux comptes</button>
-    <button class="btn lock" id="lockBtn" title="Verrouille le panneau : aucune entrée ne part (annulations et mise à plat restent possibles)"><svg class="i"><use href="#i-unlock"/></svg><span>Déverrouillé</span></button>
+    <button class="btn" id="rescanBtn" title="Détecte les comptes nouvellement ouverts sur tes logins Tradovate connectés et les ajoute au groupe"><svg class="i"><use href="#i-search"/></svg><span>Comptes</span></button>
+    <button class="btn relay" id="relayBtn" title="Relais Tradovate : un ordre passé dans ton navigateur sur un compte du groupe part aussi sur les autres, au même instant"><svg class="i"><use href="#i-zap"/></svg><span>Relais</span></button>
+    <button class="btn lock" id="lockBtn" title="Verrouille le panneau : aucune entrée ne part (annulations et mise à plat restent possibles)"><svg class="i"><use href="#i-unlock"/></svg><span>Verrou OFF</span></button>
     <button class="btn danger" id="flatAllBtn" title="Annule tous les ordres et clôture toutes les positions, sur tous les comptes, au marché"><svg class="i"><use href="#i-flat"/></svg>Tout à plat</button>
   </header>
 
@@ -627,6 +631,12 @@
     try { await post('/api/lock', { locked: on }); showToast(on ? 'Panneau verrouillé' : 'Panneau déverrouillé'); } catch (_) { showToast('Serveur injoignable'); }
     refresh();
   };
+  $('relayBtn').onclick = async () => {
+    const on = !(lastState && lastState.relay && lastState.relay.enabled);
+    if (!on && !window.confirm('Désactiver le relais Tradovate ?\n\nTes ordres passés dans le navigateur ne seront plus répercutés sur les autres comptes (le panneau d’ordre reste utilisable).')) return;
+    try { await post('/api/relay', { enabled: on }); showToast(on ? '⚡ Relais Tradovate activé' : 'Relais Tradovate désactivé'); } catch (_) { showToast('Serveur injoignable'); }
+    refresh();
+  };
   $('flatAllBtn').onclick = async () => {
     const s = lastState; if (!s) return;
     const openPos = s.accounts.reduce((n, a) => n + (a.positions || []).length, 0);
@@ -827,8 +837,16 @@
     }
     const off = s.accounts.filter(a => a.enabled && !a.connected);
     if (off.length && off.length === s.accounts.filter(a => a.enabled).length) out.push(`<div class="banner warn">${ico('alert')}<span>Aucun compte connecté. Ouvre tes sessions Tradovate dans le navigateur (extension active) : les tokens arrivent tout seuls.</span></div>`);
+    const r = s.relay || {};
+    if (r.enabled) {
+      const seen = r.extensionSeenAt ? (Date.now() - r.extensionSeenAt) : null;
+      if (seen === null || seen > 3 * 60000) out.push(`<div class="banner warn">${ico('zap')}<span><b>Relais Tradovate actif</b>, mais l’extension n’a pas donné signe de vie${seen === null ? '' : ' depuis ' + Math.round(seen / 60000) + ' min'}. Recharge ton onglet Tradovate (extension v1.2 requise) pour que tes ordres soient relayés.</span></div>`);
+    } else if (s.accounts.filter(a => a.enabled).length > 1) {
+      out.push(`<div class="banner info">${ico('zap')}<span><b>Relais Tradovate désactivé</b> — un ordre passé dans le navigateur ne part que sur son compte. Réactive-le en haut à droite.</span></div>`);
+    }
     $('banners').innerHTML = out.join('');
   }
+  const ago = (ts) => { const s = Math.round((Date.now() - ts) / 1000); return s < 60 ? s + ' s' : Math.round(s / 60) + ' min'; };
 
   function render(s) {
     lastState = s;
@@ -838,7 +856,15 @@
     $('badges').innerHTML = `<span class="badge ${env === 'live' ? 'live' : 'demo'}">${esc(s.environment || '?')}</span>` + (s.dryRun ? ' <span class="badge dry">simulation</span>' : '') + (s.license && s.license.licensed ? ' <span class="badge edge">Edge ✓</span>' : '');
     const cls = s.connected === 0 ? 'ko' : (s.connected < s.total ? 'part' : 'ok');
     $('conn').innerHTML = `<span class="dot ${cls}"></span><span><b>${s.connected}</b>/${s.total} connecté${s.connected > 1 ? 's' : ''}</span>`;
-    const lb = $('lockBtn'); lb.classList.toggle('on', !!s.locked); lb.innerHTML = `${ico(s.locked ? 'lock' : 'unlock')}<span>${s.locked ? 'Verrouillé' : 'Déverrouillé'}</span>`;
+    const lb = $('lockBtn'); lb.classList.toggle('on', !!s.locked); lb.innerHTML = `${ico(s.locked ? 'lock' : 'unlock')}<span>${s.locked ? 'Verrou ON' : 'Verrou OFF'}</span>`;
+    lb.title = s.locked ? 'Panneau VERROUILLÉ : aucune entrée ne part (ni panneau, ni relais). Annulations et mise à plat restent possibles. Clique pour déverrouiller.' : 'Verrouille le panneau : aucune entrée ne part (annulations et mise à plat restent possibles).';
+    const r = s.relay || {};
+    const rb = $('relayBtn'); rb.classList.toggle('on', !!r.enabled);
+    rb.innerHTML = `${ico('zap')}<span>Relais ${r.enabled ? 'ON' : 'OFF'}</span>`;
+    rb.title = (r.enabled ? 'Relais Tradovate ACTIF : un ordre passé dans ton navigateur sur un compte du groupe part aussi sur les autres, au même instant.' : 'Relais Tradovate désactivé — clique pour l’activer.')
+      + (r.count ? `\n${r.count} ordre(s) relayé(s)` + (r.lastSeenAt ? `, dernier il y a ${ago(r.lastSeenAt)}` : '') + (r.lastDelayMs != null ? ` (navigateur → copieur : ${r.lastDelayMs} ms)` : '') : '')
+      + (r.extensionSeenAt ? `\nExtension vue il y a ${ago(r.extensionSeenAt)}` : '\nExtension pas encore vue');
+    $('tkMode').textContent = r.enabled ? 'relais Tradovate ON' : 'groupe';
     banners(s);
     // comptes — préserve la saisie en cours dans un champ multiplicateur
     const ae = document.activeElement;

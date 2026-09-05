@@ -226,6 +226,99 @@ export function computeDesync(
 
 const uid = (): string => Math.random().toString(36).slice(2, 8) + Date.now().toString(36).slice(-4);
 
+// --- relais Tradovate (ordre intercepté dans le navigateur par l'extension) ------------
+
+/** Message poussé par l'extension : la requête d'ordre telle que le navigateur l'envoie
+ *  (kind "request"), puis la réponse Tradovate (kind "response") pour mémoriser l'orderId
+ *  source → les modifications / annulations suivantes peuvent être mappées exactement. */
+export interface RelayMessage {
+  kind: "request" | "response";
+  teeId: string;
+  endpoint?: string;
+  body?: Record<string, any>;
+  /** Horodatage (ms epoch) de l'interception dans le navigateur. */
+  t?: number;
+  status?: number;
+  data?: Record<string, any>;
+  via?: string;
+}
+
+interface TeeLeg {
+  account: GroupAccount;
+  qty: number;
+  status: "placed" | "failed" | "skipped" | "dry";
+  orderId?: number;
+  ocoId?: number;
+  strategyId?: number;
+  error?: string;
+}
+
+interface TeeRecord {
+  teeId: string;
+  ts: number;
+  source: GroupAccount;
+  endpoint: string;
+  symbol?: string;
+  sourceOrderId?: number;
+  sourceOcoId?: number;
+  sourceStrategyId?: number;
+  legs: TeeLeg[];
+}
+
+const RELAY_ENTRY = new Set(["order/placeorder", "order/placeoco", "order/placeoso", "orderstrategy/startorderstrategy"]);
+
+/** Quantité relayée : qty_source × mult_cible ÷ mult_source, arrondie VERS LE BAS
+ *  (mult source 0 ou absent → 1). Ex. source ×1 qty 2 → cible ×3 = 6 ; cible ×0,5 = 1. */
+export function relayQty(sourceQty: number, sourceMult: number, targetMult: number): number {
+  const sm = sourceMult > 0 ? sourceMult : 1;
+  return Math.max(0, Math.floor((Number(sourceQty) || 0) * targetMult / sm + 1e-9));
+}
+
+/** Rescale les quantités d'un `params` de stratégie Tradovate (entryVersion + brackets). */
+export function scaleStrategyParams(params: string, qtyOf: (q: number) => number): { params: string; entryQty: number; entry?: Record<string, any> } {
+  try {
+    const p = JSON.parse(params);
+    const entry = p?.entryVersion;
+    const q0 = Number(entry?.orderQty) || 0;
+    const q1 = qtyOf(q0);
+    if (entry) entry.orderQty = q1;
+    if (Array.isArray(p?.brackets)) {
+      for (const b of p.brackets) if (b && typeof b.qty === "number") b.qty = Math.max(0, Math.min(q1, qtyOf(b.qty)));
+    }
+    return { params: JSON.stringify(p), entryQty: q1, entry };
+  } catch {
+    return { params, entryQty: 0 };
+  }
+}
+
+/** Corps de la requête pour un compte cible : même ordre, compte + quantité changés.
+ *  null = rien à envoyer (quantité 0). */
+export function teeBody(
+  endpoint: string,
+  body: Record<string, any>,
+  target: { accountId: number; spec: string },
+  qtyOf: (q: number) => number,
+): Record<string, unknown> | null {
+  const ep = endpoint.toLowerCase();
+  if (ep === "orderstrategy/startorderstrategy") {
+    const s = scaleStrategyParams(String(body.params ?? ""), qtyOf);
+    if (s.entryQty <= 0) return null;
+    return { ...body, accountId: target.accountId, accountSpec: target.spec, params: s.params, uuid: cryptoUuid(), isAutomated: true };
+  }
+  if (ep === "order/liquidateposition") {
+    return { accountId: target.accountId, contractId: body.contractId, admin: false };
+  }
+  const qty = qtyOf(Number(body.orderQty) || 0);
+  if (qty <= 0) return null;
+  const out: Record<string, unknown> = { ...body, accountId: target.accountId, accountSpec: target.spec, orderQty: qty, isAutomated: true };
+  delete out.uuid;
+  return out;
+}
+
+function cryptoUuid(): string {
+  try { return (globalThis.crypto as any).randomUUID(); } catch { return uid() + "-" + uid(); }
+}
+
 export class GroupEngine {
   private cfg: Config;
   private configPath = "";
@@ -249,8 +342,30 @@ export class GroupEngine {
   private syncSince = new Map<string, { since: number; logged: boolean }>();
   private confirmedDesync: DesyncEntry[] = [];
 
+  /** Relais Tradovate (ordres interceptés dans le navigateur). */
+  private relayEnabled = true;
+  private tees = new Map<string, TeeRecord>();
+  private bySourceOrder = new Map<number, TeeRecord>();
+  private relayStats = { lastSeenAt: 0, count: 0, lastDelayMs: undefined as number | undefined, extensionSeenAt: 0 };
+
   constructor(cfg: Config) {
     this.cfg = cfg;
+    this.relayEnabled = cfg.relay !== false;
+  }
+
+  /** L'extension vient de parler au pont (token ou relais) : sert à l'indicateur du dashboard. */
+  noteExtension(): void {
+    this.relayStats.extensionSeenAt = Date.now();
+  }
+
+  setRelay(on: boolean): void {
+    this.relayEnabled = on;
+    this.cfg.relay = on;
+    this.persistConfig();
+    log.info(on ? "Relais Tradovate ACTIVÉ — un ordre passé dans le navigateur part aussi sur les autres comptes." : "Relais Tradovate désactivé.");
+  }
+  get isRelayEnabled(): boolean {
+    return this.relayEnabled;
   }
 
   setLicenseGate(gate: LicenseGate): void {
@@ -803,6 +918,267 @@ export class GroupEngine {
     this.recentSymbols = [symbol, ...this.recentSymbols.filter((s) => s !== symbol)].slice(0, 6);
   }
 
+  // --- relais Tradovate --------------------------------------------------------------
+
+  private accountByIds(accountId?: unknown, accountSpec?: unknown): GroupAccount | undefined {
+    const id = Number(accountId) || 0;
+    const spec = String(accountSpec ?? "").toLowerCase();
+    return this.accounts.find((a) => (id && a.accountId === id) || (spec && (a.spec.toLowerCase() === spec || a.label.toLowerCase() === spec)));
+  }
+
+  /** Point d'entrée du pont : un ordre (ou sa réponse) intercepté dans le navigateur. */
+  async relay(msg: RelayMessage): Promise<{ ok: boolean; note?: string; event?: GroupEvent }> {
+    this.noteExtension();
+    if (!msg || !msg.teeId) return { ok: false, note: "message invalide" };
+    if (msg.kind === "response") {
+      const rec = this.tees.get(msg.teeId);
+      if (!rec) return { ok: false, note: "tee inconnu" };
+      const d = msg.data ?? {};
+      if (d.orderId) { rec.sourceOrderId = Number(d.orderId); this.bySourceOrder.set(rec.sourceOrderId, rec); }
+      if (d.ocoId) { rec.sourceOcoId = Number(d.ocoId); this.bySourceOrder.set(rec.sourceOcoId, rec); }
+      if (d.orderStrategy?.id) rec.sourceStrategyId = Number(d.orderStrategy.id);
+      return { ok: true };
+    }
+    if (this.tees.has(msg.teeId)) return { ok: false, note: "doublon" };
+    const endpoint = String(msg.endpoint || "").toLowerCase();
+    const body = msg.body ?? {};
+    const delay = typeof msg.t === "number" && msg.t > 0 ? Math.max(0, Date.now() - msg.t) : undefined;
+    this.relayStats.lastSeenAt = Date.now();
+    this.relayStats.count++;
+    this.relayStats.lastDelayMs = delay;
+    if (RELAY_ENTRY.has(endpoint)) return this.relayEntry(msg.teeId, endpoint, body, delay);
+    if (endpoint === "order/modifyorder") return this.relayModifyOrCancel("modify", body, delay);
+    if (endpoint === "order/cancelorder") return this.relayModifyOrCancel("cancel", body, delay);
+    if (endpoint === "order/liquidateposition") return this.relayLiquidate(body, delay);
+    return { ok: false, note: `endpoint ignoré : ${endpoint}` };
+  }
+
+  private relayNote(source: GroupAccount, delay?: number, extra?: string): string {
+    return `relais Tradovate · ${source.label}` + (delay !== undefined ? ` · relais ${delay} ms` : "") + (extra ? ` · ${extra}` : "");
+  }
+
+  private async relayEntry(teeId: string, endpoint: string, body: Record<string, any>, delay?: number): Promise<{ ok: boolean; note?: string; event?: GroupEvent }> {
+    const source = this.accountByIds(body.accountId, body.accountSpec);
+    if (!source) {
+      log.debug(`relais : compte source inconnu (${body.accountSpec ?? body.accountId}) — ignoré`);
+      return { ok: false, note: "compte source hors du copieur" };
+    }
+    if (!source.enabled) {
+      log.info(`relais : ${source.label} est hors groupe — ordre non relayé`);
+      return { ok: false, note: "compte source hors groupe" };
+    }
+    // Description de l'ordre source (pour le journal).
+    let qty = Number(body.orderQty) || 0;
+    let orderType = String(body.orderType ?? "");
+    let price = typeof body.price === "number" ? body.price : undefined;
+    let stopPrice = typeof body.stopPrice === "number" ? body.stopPrice : undefined;
+    let extra = endpoint === "order/placeoco" ? "OCO" : endpoint === "order/placeoso" ? "OSO" : undefined;
+    if (endpoint === "orderstrategy/startorderstrategy") {
+      const s = scaleStrategyParams(String(body.params ?? ""), (q) => q);
+      qty = s.entryQty;
+      orderType = String(s.entry?.orderType ?? "");
+      price = typeof s.entry?.price === "number" ? s.entry.price : undefined;
+      stopPrice = typeof s.entry?.stopPrice === "number" ? s.entry.stopPrice : undefined;
+      extra = "brackets";
+    }
+    const symbol = String(body.symbol ?? "").toUpperCase();
+    const action: OrderAction = body.action === "Sell" ? "Sell" : "Buy";
+    const base: Omit<GroupEvent, "ok" | "failed" | "skipped" | "legs"> = { ts: Date.now(), kind: "entry", symbol, action, qty, orderType, price, stopPrice };
+    const blocked = (why: string) => {
+      const e: GroupEvent = { ...base, kind: "blocked", ok: 0, failed: 0, skipped: 0, legs: [], note: this.relayNote(source, delay, why) };
+      log.warn(`Relais bloqué — ${why} (${source.label} ${action} ${qty} ${symbol})`);
+      this.emit(e);
+      return { ok: false, note: why, event: e };
+    };
+    if (!this.relayEnabled) return blocked("relais désactivé");
+    if (this.locked) return blocked("panneau verrouillé");
+    if (this.gate && !this.gate.licensed) return blocked("abonnement Edge requis");
+
+    const targets = this.accounts.filter((a) => a.enabled && a !== source);
+    const rec: TeeRecord = { teeId, ts: Date.now(), source, endpoint, symbol, legs: [] };
+    this.tees.set(teeId, rec);
+    if (this.tees.size > 500) this.tees.delete(this.tees.keys().next().value as string);
+    log.info(`RELAIS ${source.label} ${action.toUpperCase()} ${qty} ${symbol} ${orderType}${extra ? ` (${extra})` : ""}` + (delay !== undefined ? ` · ${delay} ms depuis le navigateur` : "") + ` → ${targets.length} autre(s) compte(s)`);
+
+    const t0 = Date.now();
+    let firstSent = 0, lastSent = 0, lastAck = t0;
+    const legs: GroupLeg[] = [];
+    await Promise.all(
+      targets.map(async (a) => {
+        const qtyOf = (q: number) => relayQty(q, source.multiplier, a.multiplier);
+        const tb = teeBody(endpoint, body, { accountId: a.accountId, spec: a.spec }, qtyOf);
+        const q = tb ? Number((tb as any).orderQty ?? qtyOf(qty)) || qtyOf(qty) : 0;
+        const leg: GroupLeg = { label: a.label, spec: a.spec, qty: q, status: "placed" };
+        const tl: TeeLeg = { account: a, qty: q, status: "placed" };
+        legs.push(leg);
+        rec.legs.push(tl);
+        if (!a.client.isReady || !a.accountId) { leg.status = tl.status = "skipped"; leg.error = "déconnecté"; return; }
+        if (!tb) { leg.status = tl.status = "skipped"; leg.error = "quantité 0 (multiplicateur)"; return; }
+        const sent = Date.now();
+        firstSent = firstSent || sent;
+        lastSent = sent;
+        leg.sentOffsetMs = sent - firstSent;
+        if (this.cfg.dryRun) { leg.status = tl.status = "dry"; log.info(`  [DRY] ${a.label}: ${endpoint} ${JSON.stringify(tb)}`); return; }
+        try {
+          const res = await a.client.request(endpoint === "orderstrategy/startorderstrategy" ? "orderStrategy/startOrderStrategy" : endpoint, tb);
+          const ack = Date.now();
+          leg.ackMs = ack - sent;
+          lastAck = Math.max(lastAck, ack);
+          const d = (res.d ?? {}) as Record<string, any>;
+          if (d.failureReason || d.failureText || d.errorText) throw new Error(String(d.failureText || d.failureReason || d.errorText));
+          tl.orderId = Number(d.orderId) || undefined;
+          tl.ocoId = Number(d.ocoId) || undefined;
+          tl.strategyId = Number(d.orderStrategy?.id) || undefined;
+          leg.orderId = tl.orderId ?? tl.strategyId;
+          log.info(`  ${a.label}: relayé #${leg.orderId ?? "?"} (${q} ${symbol}) en ${leg.ackMs} ms`);
+        } catch (err) {
+          leg.status = tl.status = "failed";
+          leg.error = tl.error = String((err as Error)?.message || err);
+          log.error(`  ${a.label}: relais ÉCHEC — ${leg.error}`);
+        }
+      }),
+    );
+    legs.sort((x, y) => targets.findIndex((a) => a.spec === x.spec) - targets.findIndex((a) => a.spec === y.spec));
+    if (symbol) this.rememberSymbol(symbol);
+    const ev: GroupEvent = {
+      ...base,
+      groupId: teeId,
+      ok: legs.filter((l) => l.status === "placed" || l.status === "dry").length,
+      failed: legs.filter((l) => l.status === "failed").length,
+      skipped: legs.filter((l) => l.status === "skipped").length,
+      legs,
+      latencyMs: this.cfg.dryRun ? 0 : lastAck - t0,
+      spreadMs: firstSent ? lastSent - firstSent : 0,
+      note: this.relayNote(source, delay, extra),
+    };
+    this.emit(ev);
+    return { ok: ev.failed === 0, event: ev };
+  }
+
+  /** Modification / annulation faite dans Tradovate sur l'ordre source → même chose sur les
+   *  copies. Mapping EXACT via la réponse mémorisée (orderId source → orderId de chaque
+   *  compte) ; sinon PAR CORRESPONDANCE : sur chaque autre compte, les ordres en attente de
+   *  même contrat + sens + type (un trader a en général un seul stop par instrument). */
+  private async relayModifyOrCancel(op: "modify" | "cancel", body: Record<string, any>, delay?: number): Promise<{ ok: boolean; note?: string; event?: GroupEvent }> {
+    const orderId = Number(body.orderId) || 0;
+    if (!orderId) return { ok: false, note: "orderId manquant" };
+    const rec = this.bySourceOrder.get(orderId);
+    let source: GroupAccount | undefined = rec?.source;
+    let srcOrder: Order | undefined;
+    if (!source) {
+      for (const a of this.accounts) {
+        const o = a.client.order(orderId);
+        if (o && a.accountId === o.accountId) { source = a; srcOrder = o; break; }
+      }
+    }
+    if (!source) {
+      log.debug(`relais ${op} : ordre source #${orderId} inconnu — ignoré`);
+      return { ok: false, note: "ordre source inconnu" };
+    }
+    if (!source.enabled) return { ok: false, note: "compte source hors groupe" };
+    if (!this.relayEnabled) return { ok: false, note: "relais désactivé" };
+    const targets = this.accounts.filter((a) => a.enabled && a !== source && a.client.isReady && a.accountId);
+    const legs: GroupLeg[] = [];
+    let mapped = 0, matched = 0;
+    // Clé de correspondance (fallback).
+    const version = srcOrder ? source.client.orderVersion(orderId) : undefined;
+    const key = srcOrder ? { contractId: srcOrder.contractId, action: srcOrder.action, orderType: String(body.orderType ?? version?.orderType ?? "") } : undefined;
+
+    const jobs: Array<{ a: GroupAccount; id: number; qty?: number }> = [];
+    for (const a of targets) {
+      let ids: number[] = [];
+      const leg = rec?.legs.find((l) => l.account === a);
+      if (rec && leg) {
+        const id = rec.sourceOrderId === orderId ? leg.orderId : rec.sourceOcoId === orderId ? leg.ocoId : undefined;
+        if (id) { ids = [id]; mapped++; }
+      }
+      if (!ids.length && key) {
+        ids = a.client.workingOrders(a.accountId)
+          .filter((o) => o.contractId === key.contractId && o.action === key.action && (!key.orderType || (a.client.orderVersion(o.id)?.orderType ?? key.orderType) === key.orderType))
+          .map((o) => o.id);
+        if (ids.length) matched++;
+      }
+      if (!ids.length) { legs.push({ label: a.label, spec: a.spec, qty: 0, status: "skipped", error: "aucun ordre correspondant" }); continue; }
+      for (const id of ids) jobs.push({ a, id, qty: typeof body.orderQty === "number" ? relayQty(body.orderQty, source.multiplier, a.multiplier) : undefined });
+    }
+    const symbol = rec?.symbol ?? (srcOrder ? await source.client.contractName(srcOrder.contractId).catch(() => "") : "");
+    log.info(`RELAIS ${op === "modify" ? "MODIF" : "ANNUL"} ${source.label} #${orderId}${symbol ? ` ${symbol}` : ""} → ${jobs.length} ordre(s) sur ${targets.length} compte(s) (${mapped} mappé(s), ${matched} par correspondance)`);
+    await Promise.all(
+      jobs.map(async ({ a, id, qty }) => {
+        const leg: GroupLeg = { label: a.label, spec: a.spec, qty: qty ?? 0, status: "placed", orderId: id };
+        legs.push(leg);
+        if (this.cfg.dryRun) { leg.status = "dry"; return; }
+        try {
+          if (op === "cancel") {
+            await a.client.request("order/cancelorder", { orderId: id });
+          } else {
+            const b: Record<string, unknown> = { ...body, orderId: id, isAutomated: true };
+            if (qty !== undefined) b.orderQty = qty; else delete b.orderQty;
+            if (b.orderQty === 0) delete b.orderQty;
+            await a.client.request("order/modifyorder", b);
+          }
+        } catch (err) {
+          leg.status = "failed";
+          leg.error = String((err as Error)?.message || err);
+          log.error(`  ${a.label}: relais ${op} ÉCHEC — ${leg.error}`);
+        }
+      }),
+    );
+    const ev: GroupEvent = {
+      ts: Date.now(),
+      kind: op === "modify" ? "modify" : "cancel",
+      symbol: symbol || undefined,
+      orderType: body.orderType ? String(body.orderType) : undefined,
+      price: typeof body.price === "number" ? body.price : undefined,
+      stopPrice: typeof body.stopPrice === "number" ? body.stopPrice : undefined,
+      ok: legs.filter((l) => l.status === "placed" || l.status === "dry").length,
+      failed: legs.filter((l) => l.status === "failed").length,
+      skipped: legs.filter((l) => l.status === "skipped").length,
+      legs,
+      note: this.relayNote(source, delay, op === "modify" ? "ordre modifié" : "ordre annulé") + (matched ? " · par correspondance" : ""),
+    };
+    this.emit(ev);
+    return { ok: ev.failed === 0, event: ev };
+  }
+
+  private async relayLiquidate(body: Record<string, any>, delay?: number): Promise<{ ok: boolean; note?: string; event?: GroupEvent }> {
+    const source = this.accountByIds(body.accountId, body.accountSpec);
+    if (!source) return { ok: false, note: "compte source hors du copieur" };
+    if (!source.enabled) return { ok: false, note: "compte source hors groupe" };
+    if (!this.relayEnabled) return { ok: false, note: "relais désactivé" };
+    const contractId = Number(body.contractId) || 0;
+    const targets = this.accounts.filter((a) => a.enabled && a !== source && a.client.isReady && a.accountId);
+    const legs: GroupLeg[] = [];
+    let symbol = "";
+    await Promise.all(
+      targets.map(async (a) => {
+        const pos = a.client.openPositions(a.accountId).filter((p) => !contractId || p.contractId === contractId).filter((p) => p.netPos);
+        if (!pos.length) { legs.push({ label: a.label, spec: a.spec, qty: 0, status: "skipped", error: "à plat" }); return; }
+        for (const p of pos) {
+          if (!p.symbol.startsWith("#")) symbol = p.symbol;
+          const leg: GroupLeg = { label: a.label, spec: a.spec, qty: Math.abs(p.netPos), status: "placed" };
+          legs.push(leg);
+          if (this.cfg.dryRun) { leg.status = "dry"; continue; }
+          try { await a.client.request("order/liquidateposition", { accountId: a.accountId, contractId: p.contractId, admin: false }); }
+          catch (err) { leg.status = "failed"; leg.error = String((err as Error)?.message || err); }
+        }
+      }),
+    );
+    log.info(`RELAIS À PLAT ${source.label}${symbol ? ` ${symbol}` : ""} → ${legs.filter((l) => l.status !== "skipped").length} position(s) sur les autres comptes`);
+    const ev: GroupEvent = {
+      ts: Date.now(),
+      kind: "flatten",
+      symbol: symbol || undefined,
+      ok: legs.filter((l) => l.status === "placed" || l.status === "dry").length,
+      failed: legs.filter((l) => l.status === "failed").length,
+      skipped: legs.filter((l) => l.status === "skipped").length,
+      legs,
+      note: this.relayNote(source, delay, "position clôturée dans Tradovate"),
+    };
+    this.emit(ev);
+    return { ok: ev.failed === 0, event: ev };
+  }
+
   // --- sorties SL/TP groupées -------------------------------------------------------
 
   exitGroups(): ExitGroup[] {
@@ -1170,6 +1546,13 @@ export class GroupEngine {
       environment: this.cfg.environment,
       dryRun: this.cfg.dryRun,
       locked: this.locked,
+      relay: {
+        enabled: this.relayEnabled,
+        count: this.relayStats.count,
+        lastSeenAt: this.relayStats.lastSeenAt || null,
+        lastDelayMs: this.relayStats.lastDelayMs ?? null,
+        extensionSeenAt: this.relayStats.extensionSeenAt || null,
+      },
       license: this.gate?.status() ?? null,
       connected,
       total: accounts.length,

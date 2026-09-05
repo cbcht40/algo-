@@ -77,6 +77,9 @@ export interface Config {
   auth: AuthConfig;
   /** Mode sync : le groupe de comptes (source de vérité). */
   accounts: AccountEntry[];
+  /** Relais Tradovate : un ordre passé dans le navigateur sur un compte du groupe est
+   *  envoyé au même instant sur les autres (extension → pont local). Défaut true. */
+  relay?: boolean;
   /** Mode mirror (historique) — dérivés de `accounts` s'ils sont absents. */
   master: AccountConfig;
   followers: FollowerConfig[];
@@ -195,6 +198,7 @@ export function loadConfig(path: string): Config {
     license: c.license,
     auth,
     accounts,
+    relay: c.relay !== false,
     master,
     followers,
     removedSpecs: c.removedSpecs,
