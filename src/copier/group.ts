@@ -39,6 +39,8 @@ const GUARD_GRACE_MS = 1_200;
 const GUARD_MOVED_WINDOW_MS = 2_500;
 const GUARD_TEE_WINDOW_MS = 20_000;
 const KNOWN_TTL_MS = 6 * 60 * 60_000;
+/** Login inconnu sans compte exploitable : délai avant de retenter une adoption. */
+const ADOPT_RETRY_MS = 10 * 60_000;
 
 export type EntryType = "Market" | "Limit" | "Stop";
 export type TimeInForce = "Day" | "GTC";
@@ -2115,8 +2117,12 @@ export class GroupEngine {
    *  groupe, la config est réécrite. Plus besoin de refaire l'onboarding : ouvrir la session
    *  dans le navigateur suffit. */
   private adopting = new Set<string>();
+  /** Logins sans compte exploitable : on ne retente pas à chaque battement de cœur. */
+  private adoptFailed = new Map<string, number>();
   private async adoptLogin(token: string, sub: string): Promise<{ ok: boolean; login?: string; acted?: boolean; adopted?: string[]; error?: string }> {
     if (this.adopting.has(sub)) return { ok: false, error: `login ${sub} : adoption en cours` };
+    const failedAt = this.adoptFailed.get(sub);
+    if (failedAt && Date.now() - failedAt < ADOPT_RETRY_MS) return { ok: false, error: `login ${sub} : aucun compte accessible (réessai plus tard)` };
     this.adopting.add(sub);
     try {
       for (const env of ["demo", "live"] as Environment[]) {
@@ -2132,6 +2138,7 @@ export class GroupEngine {
         this.clients.set(`token|${env}|${token}`, c);
         c.onStatus((s) => { if (s === "ready") this.onLoginReady(c); });
         const added = this.addAccountsOf(c);
+        this.adoptFailed.delete(sub);
         this.onLoginReady(c);
         const names = c.accounts.map((a) => a.name);
         log.info(`Nouveau login Tradovate adopté [${env}] : ${names.join(", ")}` + (added.length ? ` → ${added.length} compte(s) ajouté(s) au groupe` : " (comptes déjà connus ou masqués)"));
@@ -2141,6 +2148,7 @@ export class GroupEngine {
         });
         return { ok: true, login: c.label, acted: true, adopted: added };
       }
+      this.adoptFailed.set(sub, Date.now());
       log.warn(`Token reçu pour un login inconnu (${sub}) : aucun compte accessible en demo ni en live.`);
       return { ok: false, error: `login ${sub} : aucun compte accessible avec ce token` };
     } finally {

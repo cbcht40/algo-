@@ -1,6 +1,6 @@
 {
   "name": "tradovate-copier",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "Panneau d'ordre multi-comptes Tradovate : chaque ordre part sur tous les comptes en même temps (plus de maître/followers).",
   "author": "Let-Trade Journal",
   "type": "module",

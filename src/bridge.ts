@@ -3,6 +3,7 @@
 //
 //   GET  /pair                        -> { key }   (origine extension seulement)
 //   POST /token  { token, key }       -> route le token de session vers son login
+//   POST /ping   { key }              -> battement de cœur de l'extension (indicateur)
 //   POST /relay  RelayMessage + key   -> ordre intercepté dans le navigateur (mode sync)
 //   GET  /status                      -> { running, logins: [...] }  (origine extension)
 import { createServer } from "node:http";
@@ -65,6 +66,15 @@ export function startBridge(engine: TokenSink, port = 7878): void {
         } catch (err) {
           return void json(400, { ok: false, error: String(err) });
         }
+      }
+
+      // Battement de cœur de l'extension (toutes les minutes, même sans rien à dire) : il
+      // alimente l'indicateur « extension vue il y a … » et distingue une extension muette
+      // d'une session Tradovate expirée.
+      if (req.url?.startsWith("/ping")) {
+        engine.noteExtension?.();
+        const logins = engine.status();
+        return void json(200, { ok: true, ready: logins.filter((l) => l.ready).length, logins: logins.length });
       }
 
       if (req.url?.startsWith("/relay")) {

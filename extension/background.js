@@ -6,10 +6,26 @@
 
 const COPIER = "http://127.0.0.1:7878";
 
-// In-memory: sub -> { token, exp }. Tokens never touch chrome.storage (only
-// non-secret display info does), so an unloaded worker simply re-learns them
-// from the next Tradovate request.
+// sub -> { token, exp }. Conservés dans chrome.storage.SESSION : mémoire vive du navigateur,
+// jamais le disque, effacé à la fermeture de Chrome — et réservé aux contextes de confiance
+// (pas les pages web). Indispensable : le service worker MV3 est déchargé après ~30 s
+// d'inactivité ; sans ça il perdait le jeton et ne pouvait plus ranimer le copieur tant que
+// l'onglet Tradovate ne refaisait pas une requête (onglet en arrière-plan = gelé par Chrome).
 const tokens = {};
+let loading = null;
+function loadTokens() {
+  if (loading) return loading;
+  loading = (async () => {
+    try {
+      const s = await chrome.storage.session.get("tokens");
+      if (s && s.tokens) for (const sub of Object.keys(s.tokens)) if (!tokens[sub]) tokens[sub] = s.tokens[sub];
+    } catch {}
+  })();
+  return loading;
+}
+function saveTokens() {
+  try { chrome.storage.session.set({ tokens: tokens }); } catch {}
+}
 let bridgeKey = "";
 let pairing = null;
 
@@ -70,6 +86,11 @@ async function setDisplay(logins) {
   chrome.action.setBadgeBackgroundColor({ color: anyOk ? "#4f7cff" : "#9ca3af" });
 }
 
+/** Le jeton est-il encore utilisable ? (30 s de marge) */
+function alive(entry) {
+  return !!entry && (!entry.exp || entry.exp * 1000 > Date.now() + 30000);
+}
+
 async function send(sub) {
   const entry = tokens[sub];
   if (!entry) return;
@@ -100,10 +121,10 @@ function onToken(jwt) {
   const { sub, exp, email } = decode(jwt);
   if (!sub) return;
   const prev = tokens[sub];
+  if (prev && prev.token === jwt) return; // Tradovate renvoie le même bearer très souvent
   tokens[sub] = { token: jwt, exp, email };
-  // Only hit the copier when the token actually changed (Tradovate fires lots
-  // of requests with the same bearer).
-  if (!prev || prev.token !== jwt) send(sub);
+  saveTokens();
+  send(sub);
 }
 
 // 1) Capture the bearer from every Tradovate API request.
@@ -120,19 +141,27 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
   ["requestHeaders", "extraHeaders"],
 );
 
-// 2) Retry every minute: when the copier was offline (just launched, rebooted),
-// re-deliver the latest known tokens automatically — and (re)pair if needed.
+// 2) Battement de cœur, toutes les minutes (une alarme réveille le service worker même si
+// l'onglet Tradovate est en arrière-plan et gelé par Chrome — contrairement à un setInterval
+// de la page). On repousse le jeton À CHAQUE FOIS, pas seulement après un échec : c'est ce
+// qui ranime la session du copieur quand elle est tombée (Mac en veille, socket coupé) sans
+// que l'utilisateur ait à recharger son onglet. Côté copieur c'est gratuit quand la session
+// est saine (le jeton identique n'est pas rejoué). Un simple ping garde l'indicateur
+// « extension vue il y a … » juste, même quand tous les jetons sont expirés.
 chrome.alarms.create("retry", { periodInMinutes: 1 });
 chrome.alarms.onAlarm.addListener(async (a) => {
   if (a.name !== "retry") return;
+  await loadTokens();
   if (!(await loadKey())) await pair();
-  const logins = await getDisplay();
+  let sent = 0;
   for (const sub of Object.keys(tokens)) {
-    if (!logins[sub]?.sentOk) await send(sub);
+    if (alive(tokens[sub])) { await send(sub); sent++; }
   }
+  if (!sent) await postBridge("/ping", {}).catch(() => {});
 });
-chrome.runtime.onInstalled.addListener(() => { pair(); });
-chrome.runtime.onStartup.addListener(() => { pair(); });
+chrome.runtime.onInstalled.addListener(() => { pair(); loadTokens(); });
+chrome.runtime.onStartup.addListener(() => { pair(); loadTokens(); });
+loadTokens();
 
 // 3) Popup + content-script messages.
 chrome.runtime.onMessage.addListener((msg, _sender, reply) => {

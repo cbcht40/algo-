@@ -91,6 +91,9 @@ function scanStorage() {
 }
 scanStorage();
 setInterval(scanStorage, 5000);
+// Chrome gèle les minuteurs d'un onglet en arrière-plan : au retour sur l'onglet, on
+// re-scanne tout de suite pour repousser le jeton le plus frais sans attendre le cycle.
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { scanStorage(); refreshKey(); } });
 
 // 3) Keep the background service worker warm while a Tradovate tab is open, so the
 //    fallback path never pays a cold start at the moment an order is placed.

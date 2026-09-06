@@ -56,6 +56,11 @@ interface Pending {
 const HEARTBEAT_MS = 2_500;
 const REQUEST_TIMEOUT_MS = 10_000;
 const MAX_BACKOFF_MS = 30_000;
+/** Renouvellement du jeton : on RE-TESTE périodiquement au lieu de poser un seul minuteur
+ *  à l'échéance — un Mac en veille gèle les minuteurs, celui-ci se déclencherait trop tard
+ *  (jeton déjà expiré = session perdue jusqu'à ce que l'extension en repousse un). */
+const RENEW_CHECK_MS = 30_000;
+const RENEW_MARGIN_MS = 10 * 60_000;
 /** Order statuses that are done — never cancelled by "flatten all". */
 const TERMINAL_ORDER = new Set(["Canceled", "Cancelled", "Rejected", "Expired", "Filled", "Completed"]);
 
@@ -85,6 +90,7 @@ export class TradovateClient {
   private pending = new Map<number, Pending>();
   private heartbeatTimer?: NodeJS.Timeout;
   private renewTimer?: NodeJS.Timeout;
+  private renewing = false;
   private reconnectTimer?: NodeJS.Timeout; // single-flight guard — at most one reconnect pending
   private backoff = 1_000;
   private closing = false;
@@ -226,26 +232,35 @@ export class TradovateClient {
   }
 
   private scheduleRenewal(): void {
-    if (this.renewTimer) clearTimeout(this.renewTimer);
+    if (this.renewTimer) clearInterval(this.renewTimer);
     if (!this.token?.expirationTime) return;
-    const expiresIn = new Date(this.token.expirationTime).getTime() - Date.now();
-    // Renew a few minutes early; never schedule a negative/zero delay.
-    const delay = Math.max(30_000, expiresIn - 5 * 60_000);
-    this.renewTimer = setTimeout(async () => {
+    // Contrôle toutes les 30 s : au retour de veille on renouvelle dans la minute, tant que
+    // le jeton n'est pas encore expiré. Un seul setTimeout à l'échéance ne survit pas au
+    // sommeil de la machine (il se déclenche après coup, sur un jeton déjà mort).
+    this.renewTimer = setInterval(() => void this.renewIfDue(), RENEW_CHECK_MS);
+    if (this.renewTimer.unref) this.renewTimer.unref();
+  }
+
+  /** Renouvelle le jeton s'il expire bientôt (marge large). Jamais deux à la fois. */
+  private async renewIfDue(): Promise<void> {
+    if (this.closing || this.renewing || !this.token?.expirationTime) return;
+    const left = new Date(this.token.expirationTime).getTime() - Date.now();
+    if (left > RENEW_MARGIN_MS) return;
+    this.renewing = true;
+    try {
+      this.token = await renewAccessToken(this.restBase, this.token.accessToken);
+      this.saveToken();
+      this.log.debug(`Access token renewed (valide ${Math.round((new Date(this.token.expirationTime).getTime() - Date.now()) / 60000)} min).`);
+    } catch (err) {
+      this.log.warn(`Token renewal failed: ${String(err)} — re-authenticating…`);
       try {
-        this.token = await renewAccessToken(this.restBase, this.token!.accessToken);
-        this.saveToken();
-        this.log.debug("Access token renewed.");
-        this.scheduleRenewal();
-      } catch (err) {
-        this.log.warn(`Token renewal failed: ${String(err)} — re-authenticating…`);
-        try {
-          await this.authenticate();
-        } catch (err2) {
-          this.log.warn(`Re-auth failed, will retry on next reconnect: ${String(err2)}`);
-        }
+        await this.authenticate();
+      } catch (err2) {
+        this.log.warn(`Re-auth failed, will retry on next reconnect: ${String(err2)}`);
       }
-    }, delay);
+    } finally {
+      this.renewing = false;
+    }
   }
 
   private connectSocket(): Promise<void> {
@@ -662,7 +677,7 @@ export class TradovateClient {
   async stop(): Promise<void> {
     this.closing = true;
     this.stopHeartbeat();
-    if (this.renewTimer) clearTimeout(this.renewTimer);
+    if (this.renewTimer) clearInterval(this.renewTimer);
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
     this.ws?.close();
   }
