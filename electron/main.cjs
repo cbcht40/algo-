@@ -245,6 +245,14 @@ ipcMain.on('pill:notify', (_e, { title, body }) => {
   } catch (err) { console.warn('[pill] notification', err?.message || err) }
 })
 
+// En dev (`npm run app`), Electron affiche SA propre icône dans le Dock : l'icône « Lentille »
+// n'est appliquée par electron-builder qu'au build empaqueté. On la force ici hors paquet.
+const ICON_PNG = path.join(ROOT, 'icon.png')
+function applyDevIcon() {
+  if (app.isPackaged) return
+  try { if (process.platform === 'darwin' && app.dock && fs.existsSync(ICON_PNG)) app.dock.setIcon(ICON_PNG) } catch (_) {}
+}
+
 async function createWindow() {
   win = new BrowserWindow({
     width: 1180,
@@ -253,6 +261,7 @@ async function createWindow() {
     minHeight: 600,
     backgroundColor: '#0a0a10',
     title: 'Let Trade Copieur',
+    ...(fs.existsSync(ICON_PNG) ? { icon: ICON_PNG } : {}),
     webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'preload.cjs') },
   })
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -266,6 +275,7 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  applyDevIcon()
   // Reuse an already-running copier (e.g. the launchd service); else start one.
   if (!(await dashboardUp())) startCopier()
   await createWindow()
