@@ -541,10 +541,15 @@ export class GroupEngine {
     }
     let c = this.clients.get(key);
     if (!c) {
-      c = new TradovateClient(opts);
+      c = this.makeClient(opts);
       this.clients.set(key, c);
     }
     return c;
+  }
+
+  /** Fabrique de clients (remplaçable dans les tests). */
+  private makeClient(opts: ClientOptions): TradovateClient {
+    return new TradovateClient(opts);
   }
 
   private keyOf(spec: string | undefined, label: string): string {
@@ -2078,26 +2083,69 @@ export class GroupEngine {
 
   async rescanAccounts(): Promise<{ added: number; total: number; names: string[] }> {
     await Promise.all([...this.clients.values()].map((c) => c.reSyncAccounts().catch(() => undefined)));
+    const added: string[] = [];
+    for (const client of this.clients.values()) added.push(...this.addAccountsOf(client));
+    return { added: added.length, total: this.accounts.length, names: added };
+  }
+
+  /** Ajoute au groupe les comptes d'un login qui n'y sont pas encore (ni connus, ni masqués). */
+  private addAccountsOf(client: TradovateClient): string[] {
     const known = new Set<string>(this.accounts.flatMap((a) => [a.key, a.label.toLowerCase(), a.spec.toLowerCase()]));
     const knownId = new Set<number>(this.accounts.map((a) => a.accountId).filter(Boolean));
     const removed = new Set((this.cfg.removedSpecs ?? []).map((s) => s.toLowerCase()));
     const added: string[] = [];
-    for (const client of this.clients.values()) {
-      for (const acct of client.accounts) {
-        const k = acct.name.toLowerCase();
-        if (knownId.has(acct.id) || known.has(k) || removed.has(k)) continue;
-        const entry: AccountEntry = { label: acct.name, accountSpec: acct.name, multiplier: 1, enabled: true, accessToken: client.seedToken, environment: client.env };
-        this.cfg.accounts.push(entry);
-        this.accounts.push({ key: k, label: acct.name, spec: acct.name, accountId: acct.id, client, multiplier: 1, enabled: true, environment: client.env });
-        this.resolved.add(k);
-        knownId.add(acct.id);
-        known.add(k);
-        added.push(acct.name);
-        log.info(`Nouveau compte détecté → ajouté au groupe : ${acct.name}#${acct.id}`);
-      }
+    for (const acct of client.accounts) {
+      const k = acct.name.toLowerCase();
+      if (knownId.has(acct.id) || known.has(k) || removed.has(k)) continue;
+      const entry: AccountEntry = { label: acct.name, accountSpec: acct.name, multiplier: 1, enabled: true, accessToken: client.seedToken, environment: client.env };
+      this.cfg.accounts.push(entry);
+      this.accounts.push({ key: k, label: acct.name, spec: acct.name, accountId: acct.id, client, multiplier: 1, enabled: true, environment: client.env });
+      this.resolved.add(k);
+      knownId.add(acct.id);
+      known.add(k);
+      added.push(acct.name);
+      log.info(`Nouveau compte détecté → ajouté au groupe : ${acct.name}#${acct.id}`);
     }
     if (added.length) this.persistConfig();
-    return { added: added.length, total: this.accounts.length, names: added };
+    return added;
+  }
+
+  /** Token d'un login Tradovate ABSENT de la config (nouvelle prop firm, autre login) : on
+   *  l'adopte à la volée — client en mode token (demo puis live), ses comptes rejoignent le
+   *  groupe, la config est réécrite. Plus besoin de refaire l'onboarding : ouvrir la session
+   *  dans le navigateur suffit. */
+  private adopting = new Set<string>();
+  private async adoptLogin(token: string, sub: string): Promise<{ ok: boolean; login?: string; acted?: boolean; adopted?: string[]; error?: string }> {
+    if (this.adopting.has(sub)) return { ok: false, error: `login ${sub} : adoption en cours` };
+    this.adopting.add(sub);
+    try {
+      for (const env of ["demo", "live"] as Environment[]) {
+        const c = this.makeClient({ label: `login ${sub}`, environment: env, appId: this.cfg.appId, appVersion: this.cfg.appVersion, accessToken: token });
+        try {
+          await c.start();
+        } catch (err) {
+          await c.stop().catch(() => undefined);
+          log.debug(`adoption du login ${sub} [${env}] : ${String((err as Error)?.message || err)}`);
+          continue;
+        }
+        if (!c.accounts.length) { await c.stop().catch(() => undefined); continue; }
+        this.clients.set(`token|${env}|${token}`, c);
+        c.onStatus((s) => { if (s === "ready") this.onLoginReady(c); });
+        const added = this.addAccountsOf(c);
+        this.onLoginReady(c);
+        const names = c.accounts.map((a) => a.name);
+        log.info(`Nouveau login Tradovate adopté [${env}] : ${names.join(", ")}` + (added.length ? ` → ${added.length} compte(s) ajouté(s) au groupe` : " (comptes déjà connus ou masqués)"));
+        this.emit({
+          ts: Date.now(), kind: "info", ok: 1, failed: 0, skipped: 0, legs: [],
+          note: `nouveau login Tradovate (${env}) : ${added.length ? added.join(", ") + " ajouté(s) au groupe" : names.join(", ") + " déjà connu(s)"}`,
+        });
+        return { ok: true, login: c.label, acted: true, adopted: added };
+      }
+      log.warn(`Token reçu pour un login inconnu (${sub}) : aucun compte accessible en demo ni en live.`);
+      return { ok: false, error: `login ${sub} : aucun compte accessible avec ce token` };
+    } finally {
+      this.adopting.delete(sub);
+    }
   }
 
   private displayAccounts(): GroupAccount[] {
@@ -2125,11 +2173,12 @@ export class GroupEngine {
 
   // --- pont extension / dashboard -------------------------------------------------------
 
-  async ingestToken(token: string): Promise<{ ok: boolean; login?: string; acted?: boolean; error?: string }> {
+  async ingestToken(token: string): Promise<{ ok: boolean; login?: string; acted?: boolean; adopted?: string[]; error?: string }> {
     const sub = jwtClaims(token).sub;
     if (!sub) return { ok: false, error: "token has no sub claim" };
     const client = [...this.clients.values()].find((c) => c.sub === sub);
-    if (!client) return { ok: false, error: `no configured login for userId ${sub}` };
+    // Login absent de la config (nouvelle prop firm, nouveau login Tradovate) → adopté à la volée.
+    if (!client) return this.adoptLogin(token, sub);
     try {
       const acted = await client.acceptToken(token);
       return { ok: true, login: client.label, acted };

@@ -457,4 +457,39 @@ await t("garde-fou : off, ou relais désactivé, ou compte hors groupe → rien"
   assert.equal(g2.e.setRelayGuard("bidon"), "auto");
 });
 
+// --- login Tradovate inconnu (nouvelle prop firm) → adopté à la volée -----------------------
+await t("token d'un login absent de la config → client créé (demo), comptes ajoutés au groupe, config réécrite", async () => {
+  const calls: Call[] = [];
+  const { e, events } = engineWith([{ spec: "A", mult: 1, id: 1, client: fakeClient("A", calls) }]);
+  const made: string[] = [];
+  (e as any).makeClient = (opts: any) => {
+    const c: any = fakeClient("NEW", calls);
+    c.env = opts.environment; c.label = opts.label; c.seedToken = opts.accessToken; c.sub = "4242";
+    c.accounts = opts.environment === "demo" ? [{ id: 77, name: "TDFY123", userId: 4242 }] : [];
+    c.start = async () => { made.push(opts.environment); if (opts.environment !== "demo") throw new Error("auth failed"); };
+    c.stop = async () => undefined;
+    c.acceptToken = async () => { c.accepted = (c.accepted || 0) + 1; return true; };
+    return c;
+  };
+  let persisted = 0;
+  (e as any).persistConfig = () => { persisted++; };
+  const tok = "eyJhbGciOiJIUzI1NiJ9." + Buffer.from(JSON.stringify({ sub: "4242", exp: 9999999999 })).toString("base64url") + ".sig";
+  const r = await e.ingestToken(tok);
+  assert.equal(r.ok, true); assert.deepEqual(r.adopted, ["TDFY123"]); assert.deepEqual(made, ["demo"]);
+  assert.equal(persisted, 1);
+  assert.deepEqual((e as any).cfg.accounts.map((a: any) => [a.label, a.environment, !!a.accessToken]), [["TDFY123", "demo", true]]);
+  assert.deepEqual(e.dashboardState().accounts.map((a) => [a.label, a.connected, a.enabled]), [["A", true, true], ["TDFY123", true, true]]);
+  assert.match(events.at(-1)!.note ?? "", /nouveau login Tradovate \(demo\) : TDFY123 ajouté/);
+  // même login à nouveau → routé vers le client adopté (pas de doublon)
+  const r2 = await e.ingestToken(tok);
+  assert.equal(r2.ok, true); assert.equal(made.length, 1);
+  assert.equal((e as any).clients.get(`token|demo|${tok}`).accepted, 1);
+  // token sans aucun compte (demo et live) → refusé proprement
+  (e as any).makeClient = (opts: any) => { const c: any = fakeClient("X", calls); c.accounts = []; c.start = async () => undefined; c.stop = async () => undefined; return c; };
+  const tok2 = "eyJhbGciOiJIUzI1NiJ9." + Buffer.from(JSON.stringify({ sub: "999" })).toString("base64url") + ".sig";
+  const r3 = await e.ingestToken(tok2);
+  assert.equal(r3.ok, false); assert.match(r3.error ?? "", /aucun compte/);
+  assert.equal(e.dashboardState().accounts.length, 2);
+});
+
 console.log(`\n${n} tests OK`);
