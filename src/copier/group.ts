@@ -31,6 +31,14 @@ const AUTO_RETRY_WINDOW_MS = 90_000;
 const MAX_AUTO_ATTEMPTS = 2;
 /** Un symbole surveillé par le panneau reste abonné ce temps après la dernière demande. */
 const WATCH_TTL_MS = 3 * 60_000;
+/** Garde-fou du relais : délai avant d'évaluer un fill d'origine inconnue (le temps que la
+ *  réponse Tradovate au placement — donc l'orderId source — soit relayée), fenêtre pendant
+ *  laquelle les autres comptes doivent avoir « bougé » pour être considérés synchrones,
+ *  fenêtre de couverture d'un relais récent, durée de mémoire des ordres connus. */
+const GUARD_GRACE_MS = 1_200;
+const GUARD_MOVED_WINDOW_MS = 2_500;
+const GUARD_TEE_WINDOW_MS = 20_000;
+const KNOWN_TTL_MS = 6 * 60 * 60_000;
 
 export type EntryType = "Market" | "Limit" | "Stop";
 export type TimeInForce = "Day" | "GTC";
@@ -67,7 +75,7 @@ export interface GroupLeg {
 export interface Incident {
   id: string;
   ts: number;
-  kind: "entry" | "bracket" | "modify" | "cancel" | "flatten";
+  kind: "entry" | "bracket" | "modify" | "cancel" | "flatten" | "relay";
   label: string;
   spec: string;
   symbol?: string;
@@ -386,6 +394,16 @@ export class GroupEngine {
   private tees = new Map<string, TeeRecord>();
   private bySourceOrder = new Map<number, TeeRecord>();
   private relayStats = { lastSeenAt: 0, count: 0, lastDelayMs: undefined as number | undefined, extensionSeenAt: 0 };
+  /** Garde-fou du relais : ordres créés / relayés par le copieur (id → date), couvertures
+   *  « stratégie » (compte|symbole → date : les ordres engendrés par une stratégie Tradovate
+   *  n'ont pas d'id connu), fills récents (les autres comptes ont-ils bougé ensemble ?). */
+  private known = new Map<number, number>();
+  private strategyCover = new Map<string, number>();
+  private recentFills: Array<{ client: TradovateClient; fill: Fill; at: number }> = [];
+  private seenFills = new Map<number, number>();
+  private guardMode: NonNullable<Config["relayGuard"]> = "auto";
+  private guardGraceMs = GUARD_GRACE_MS;
+  private guardStats = { caught: 0, lastAt: 0 };
 
   /** Incidents (échecs par compte) + leur relance. */
   private incidents = new Map<string, Incident & { retry: () => Promise<void>; account: GroupAccount }>();
@@ -400,6 +418,7 @@ export class GroupEngine {
   constructor(cfg: Config) {
     this.cfg = cfg;
     this.relayEnabled = cfg.relay !== false;
+    this.guardMode = cfg.relayGuard === "alert" || cfg.relayGuard === "off" ? cfg.relayGuard : "auto";
   }
 
   /** L'extension vient de parler au pont (token ou relais) : sert à l'indicateur du dashboard. */
@@ -415,6 +434,37 @@ export class GroupEngine {
   }
   get isRelayEnabled(): boolean {
     return this.relayEnabled;
+  }
+
+  /** Garde-fou du relais : "auto" (entrées rattrapées au marché), "alert" (incident + bip,
+   *  rattrapage sur clic), "off". */
+  setRelayGuard(mode: string): NonNullable<Config["relayGuard"]> {
+    const m: NonNullable<Config["relayGuard"]> = mode === "alert" || mode === "off" ? mode : "auto";
+    this.guardMode = m;
+    this.cfg.relayGuard = m;
+    this.persistConfig();
+    log.info(m === "off" ? "Garde-fou du relais désactivé." : m === "alert" ? "Garde-fou du relais : alerte seule (rattrapage sur clic)." : "Garde-fou du relais : rattrapage automatique des entrées.");
+    return m;
+  }
+  get relayGuardMode(): NonNullable<Config["relayGuard"]> {
+    return this.guardMode;
+  }
+
+  /** Mémorise un ordre créé ou relayé par le copieur : le garde-fou ne le prendra jamais pour
+   *  un ordre passé en dehors du relais. */
+  private remember(...ids: Array<number | undefined | null>): void {
+    const now = Date.now();
+    for (const id of ids) if (typeof id === "number" && id > 0) this.known.set(id, now);
+    if (this.known.size > 5000) {
+      for (const [id, at] of this.known) if (now - at > KNOWN_TTL_MS) this.known.delete(id);
+      while (this.known.size > 5000) this.known.delete(this.known.keys().next().value as number);
+    }
+  }
+
+  /** Une stratégie Tradovate (entrée + brackets côté serveur) tourne sur ce compte et ce
+   *  symbole : ses ordres n'ont pas d'id connu, ils sont couverts jusqu'au retour à plat. */
+  private coverStrategy(a: GroupAccount, symbol?: string): void {
+    if (symbol) this.strategyCover.set(`${a.key}|${symbol.toUpperCase()}`, Date.now());
   }
 
   setLicenseGate(gate: LicenseGate): void {
@@ -612,6 +662,7 @@ export class GroupEngine {
   private async onFill(client: TradovateClient, fill: Fill): Promise<void> {
     if (typeof fill.orderId !== "number") return;
     if (!fill.qty || typeof fill.price !== "number") return;
+    this.guardObserve(client, fill);
     const pb = this.pendingBrackets.get(fill.orderId);
     if (!pb) {
       // Peut-être un fill d'une entrée dont la réponse placeorder n'est pas encore traitée.
@@ -697,6 +748,7 @@ export class GroupEngine {
         if (d.failureReason || d.failureText) throw new Error(String(d.failureText || d.failureReason));
         const stopId = Number(d.orderId);
         const targetId = Number(d.ocoId);
+        this.remember(stopId, targetId);
         if (stopId) this.registerExit({ orderId: stopId, account: a, contractId: fill.contractId, symbol: pb.symbol, role: "stop", action: px.exitAction, price: px.stop, qty: fill.qty, groupId: pb.groupId, siblingId: targetId || undefined, fillPrice: fill.price });
         if (targetId) this.registerExit({ orderId: targetId, account: a, contractId: fill.contractId, symbol: pb.symbol, role: "target", action: px.exitAction, price: px.target, qty: fill.qty, groupId: pb.groupId, siblingId: stopId || undefined, fillPrice: fill.price });
         leg.orderId = stopId || undefined;
@@ -720,6 +772,7 @@ export class GroupEngine {
         const d = (res.d ?? {}) as Record<string, any>;
         if (d.failureReason || d.failureText) throw new Error(String(d.failureText || d.failureReason));
         const id = Number(d.orderId);
+        this.remember(id);
         if (id) this.registerExit({ orderId: id, account: a, contractId: fill.contractId, symbol: pb.symbol, role, action: px.exitAction, price, qty: fill.qty, groupId: pb.groupId, fillPrice: fill.price });
         leg.orderId = id || undefined;
         leg.ackMs = Date.now() - t0;
@@ -739,6 +792,8 @@ export class GroupEngine {
 
   private onOrder(client: TradovateClient, o: Order): void {
     if (typeof o.id !== "number") return;
+    // Enfant d'un ordre connu (bracket OSO, jumeau OCO, ordre lié) → connu lui aussi.
+    if (!this.known.has(o.id) && ((o.parentId && this.known.has(o.parentId)) || (o.ocoId && this.known.has(o.ocoId)) || (o.linkedId && this.known.has(o.linkedId)))) this.remember(o.id);
     // Cycle de vie des sorties SL/TP posées par le groupe.
     const x = this.exits.get(o.id);
     if (x && x.account.client === client) {
@@ -815,6 +870,8 @@ export class GroupEngine {
     setTimeout(() => {
       const still = client.openPositions(p.accountId).some((q) => q.contractId === p.contractId && q.netPos);
       if (still) return;
+      const sym = client.symbolOf(p.contractId);
+      if (sym) this.strategyCover.delete(`${acct.key}|${sym.toUpperCase()}`);
       const orphans = [...this.exits.values()].filter((x) => x.account === acct && x.contractId === p.contractId);
       for (const x of orphans) {
         const live = client.order(x.orderId);
@@ -834,6 +891,8 @@ export class GroupEngine {
     for (const [id, pb] of this.pendingBrackets) if (now - pb.createdAt > PENDING_TTL_MS) this.pendingBrackets.delete(id);
     for (const [id, e] of this.earlyFills) if (now - e.at > 15_000) this.earlyFills.delete(id);
     for (const [id, r] of this.bracketRef) if (now - r.at > PENDING_TTL_MS) this.bracketRef.delete(id);
+    for (const [k, at] of this.strategyCover) if (now - at > PENDING_TTL_MS) this.strategyCover.delete(k);
+    for (const [id, at] of this.seenFills) if (now - at > 10 * 60_000) this.seenFills.delete(id);
   }
 
   /** Après enregistrement d'un bracket en attente : rejoue les fills arrivés trop tôt. */
@@ -997,6 +1056,7 @@ export class GroupEngine {
           const d = (res.d ?? {}) as Record<string, any>;
           if (d.failureReason || d.failureText) throw new Error(String(d.failureText || d.failureReason));
           leg.orderId = Number(d.orderId) || undefined;
+          this.remember(leg.orderId);
           if (wantBracket && leg.orderId && inst) {
             this.pendingBrackets.set(leg.orderId, {
               orderId: leg.orderId,
@@ -1025,6 +1085,7 @@ export class GroupEngine {
               const d = (res.d ?? {}) as Record<string, any>;
               if (d.failureReason || d.failureText) throw new Error(String(d.failureText || d.failureReason));
               const id = Number(d.orderId) || undefined;
+              this.remember(id);
               if (wantBracket && id && inst) {
                 this.pendingBrackets.set(id, { orderId: id, account: a, symbol: inst.symbol, entryAction: req.action, stopTicks: req.bracket?.stopTicks, targetTicks: req.bracket?.targetTicks, tickSize: inst.tickSize, tif, groupId, createdAt: Date.now(), filledQty: 0 });
                 this.replayEarlyFills(id);
@@ -1083,7 +1144,8 @@ export class GroupEngine {
       const d = msg.data ?? {};
       if (d.orderId) { rec.sourceOrderId = Number(d.orderId); this.bySourceOrder.set(rec.sourceOrderId, rec); }
       if (d.ocoId) { rec.sourceOcoId = Number(d.ocoId); this.bySourceOrder.set(rec.sourceOcoId, rec); }
-      if (d.orderStrategy?.id) rec.sourceStrategyId = Number(d.orderStrategy.id);
+      if (d.orderStrategy?.id) { rec.sourceStrategyId = Number(d.orderStrategy.id); this.coverStrategy(rec.source, rec.symbol); }
+      this.remember(Number(d.orderId) || undefined, Number(d.ocoId) || undefined);
       return { ok: true };
     }
     if (this.tees.has(msg.teeId)) return { ok: false, note: "doublon" };
@@ -1145,6 +1207,7 @@ export class GroupEngine {
     const rec: TeeRecord = { teeId, ts: Date.now(), source, endpoint, symbol, legs: [] };
     this.tees.set(teeId, rec);
     if (this.tees.size > 500) this.tees.delete(this.tees.keys().next().value as string);
+    if (endpoint === "orderstrategy/startorderstrategy") this.coverStrategy(source, symbol);
     log.info(`RELAIS ${source.label} ${action.toUpperCase()} ${qty} ${symbol} ${orderType}${extra ? ` (${extra})` : ""}` + (delay !== undefined ? ` · ${delay} ms depuis le navigateur` : "") + ` → ${targets.length} autre(s) compte(s)`);
 
     const t0 = Date.now();
@@ -1176,6 +1239,8 @@ export class GroupEngine {
           tl.orderId = Number(d.orderId) || undefined;
           tl.ocoId = Number(d.ocoId) || undefined;
           tl.strategyId = Number(d.orderStrategy?.id) || undefined;
+          this.remember(tl.orderId, tl.ocoId);
+          if (tl.strategyId) this.coverStrategy(a, symbol);
           leg.orderId = tl.orderId ?? tl.strategyId;
           log.info(`  ${a.label}: relayé #${leg.orderId ?? "?"} (${q} ${symbol}) en ${leg.ackMs} ms`);
         } catch (err) {
@@ -1192,6 +1257,8 @@ export class GroupEngine {
               tl.orderId = Number(d.orderId) || undefined;
               tl.ocoId = Number(d.ocoId) || undefined;
               tl.strategyId = Number(d.orderStrategy?.id) || undefined;
+              this.remember(tl.orderId, tl.ocoId);
+              if (tl.strategyId) this.coverStrategy(a, symbol);
               tl.status = "placed";
             },
           });
@@ -1340,8 +1407,10 @@ export class GroupEngine {
           const leg: GroupLeg = { label: a.label, spec: a.spec, qty: Math.abs(p.netPos), status: "placed" };
           legs.push(leg);
           if (this.cfg.dryRun) { leg.status = "dry"; continue; }
-          try { await a.client.request("order/liquidateposition", { accountId: a.accountId, contractId: p.contractId, admin: false }); }
-          catch (err) { leg.status = "failed"; leg.error = String((err as Error)?.message || err); }
+          try {
+            const res = await a.client.request("order/liquidateposition", { accountId: a.accountId, contractId: p.contractId, admin: false });
+            this.remember(Number((res.d as Record<string, any> | undefined)?.orderId) || undefined);
+          } catch (err) { leg.status = "failed"; leg.error = String((err as Error)?.message || err); }
         }
       }),
     );
@@ -1504,7 +1573,7 @@ export class GroupEngine {
 
   // --- incidents ---------------------------------------------------------------------
 
-  private addIncident(i: { kind: Incident["kind"]; account: GroupAccount; symbol?: string; action?: OrderAction; qty?: number; error: string; critical: boolean; auto: boolean; retry: () => Promise<void> }): void {
+  private addIncident(i: { kind: Incident["kind"]; account: GroupAccount; symbol?: string; action?: OrderAction; qty?: number; error: string; critical: boolean; auto: boolean; retry: () => Promise<void> }): string {
     const id = uid();
     this.incidents.set(id, {
       id, ts: Date.now(), kind: i.kind, label: i.account.label, spec: i.account.spec, symbol: i.symbol, action: i.action, qty: i.qty,
@@ -1513,6 +1582,7 @@ export class GroupEngine {
     log.warn(`⚠ INCIDENT ${i.kind} ${i.account.label}${i.symbol ? ` ${i.symbol}` : ""} : ${i.error}${i.auto ? " (relance auto à la reconnexion)" : ""}${i.critical ? " — CRITIQUE" : ""}`);
     // Purge : garde 100 incidents max.
     if (this.incidents.size > 100) this.incidents.delete(this.incidents.keys().next().value as string);
+    return id;
   }
 
   /** Relance une action échouée (bouton « Réessayer » ou automatique). */
@@ -1571,6 +1641,146 @@ export class GroupEngine {
       .filter((i) => i.status === "open" || i.status === "retrying" || (i.resolvedAt && Date.now() - i.resolvedAt < 60_000))
       .map(({ retry: _r, account: _a, ...rest }) => rest)
       .sort((a, b) => b.ts - a.ts);
+  }
+
+  // --- garde-fou du relais -----------------------------------------------------------
+  //
+  // Le copieur voit chaque fill de chaque compte par ses propres connexions. Un fill dont
+  // l'ordre n'a été ni placé par le panneau, ni relayé, ni posé comme SL/TP, ni engendré par
+  // une stratégie relayée = un ordre passé EN DEHORS du relais (extension muette ou cassée
+  // par un changement Tradovate, app bureau/mobile, ordre posé avant le lancement). Si les
+  // autres comptes n'ont pas bougé avec lui → incident « relais manqué » : les ENTRÉES sont
+  // rattrapées au marché automatiquement (mode "auto") ; les sorties et inversions attendent
+  // un clic — une cible limite servie sur un seul compte par priorité de file ne doit pas
+  // faire clôturer les autres au marché sans accord.
+
+  private guardObserve(client: TradovateClient, fill: Fill): void {
+    if (this.guardMode === "off" || !this.relayEnabled) return;
+    const now = Date.now();
+    if (typeof fill.id === "number") {
+      if (this.seenFills.has(fill.id)) return;
+      this.seenFills.set(fill.id, now);
+      if (this.seenFills.size > 2000) this.seenFills.delete(this.seenFills.keys().next().value as number);
+    }
+    this.recentFills.push({ client, fill, at: now });
+    const cutoff = now - 60_000;
+    if (this.recentFills.length > 500 || this.recentFills[0]!.at < cutoff) this.recentFills = this.recentFills.filter((r) => r.at >= cutoff);
+    setTimeout(() => { void this.guardEvaluate(client, fill, now); }, this.guardGraceMs);
+  }
+
+  /** Compte d'un fill : via l'ordre (mémorisé même terminé), sinon le seul compte de ce login. */
+  private accountOfFill(client: TradovateClient, fill: Fill): GroupAccount | undefined {
+    const id = client.accountOfOrder(fill.orderId);
+    if (id) return this.accounts.find((a) => a.client === client && a.accountId === id);
+    const mine = this.accounts.filter((a) => a.client === client && a.accountId);
+    return mine.length === 1 ? mine[0] : undefined;
+  }
+
+  /** L'ordre de ce fill est-il connu du copieur (panneau, relais, SL/TP, stratégie, enfant
+   *  d'un ordre connu, relais récent sur ce compte et ce symbole) ? */
+  private isKnownOrigin(acct: GroupAccount, fill: Fill, symbol: string): boolean {
+    if (this.known.has(fill.orderId)) return true;
+    const o = acct.client.order(fill.orderId);
+    if (o && ((o.parentId && this.known.has(o.parentId)) || (o.ocoId && this.known.has(o.ocoId)) || (o.linkedId && this.known.has(o.linkedId)))) return true;
+    if (this.strategyCover.has(`${acct.key}|${symbol}`)) return true;
+    // Relais récent sur ce compte et ce symbole : la réponse (donc l'orderId) n'est pas encore
+    // arrivée, ou s'est perdue — dans le doute, jamais de double.
+    const since = Date.now() - GUARD_TEE_WINDOW_MS;
+    for (const rec of this.tees.values()) {
+      if (rec.ts < since || (rec.symbol ?? "") !== symbol) continue;
+      if (rec.source === acct) return true;
+      if (rec.legs.some((l) => l.account === acct && (l.status === "placed" || l.status === "dry"))) return true;
+    }
+    return false;
+  }
+
+  private async guardEvaluate(client: TradovateClient, fill: Fill, at: number): Promise<void> {
+    try {
+      if (this.guardMode === "off" || !this.relayEnabled) return;
+      const acct = this.accountOfFill(client, fill);
+      if (!acct || !acct.enabled) return;
+      let symbol = client.symbolOf(fill.contractId);
+      if (!symbol) { try { symbol = await client.contractName(fill.contractId); } catch { symbol = `#${fill.contractId}`; } }
+      symbol = symbol.toUpperCase();
+      if (this.isKnownOrigin(acct, fill, symbol)) return;
+      const action: OrderAction = fill.action === "Sell" ? "Sell" : "Buy";
+      const dir = action === "Buy" ? 1 : -1;
+      const net = client.openPositions(acct.accountId).find((p) => p.contractId === fill.contractId)?.netPos ?? 0;
+      const increasing = Math.sign(net) === dir && Math.abs(net) >= fill.qty;
+      // Les autres comptes ont-ils bougé avec lui (même contrat, même sens, dans la fenêtre) ?
+      const others = this.accounts.filter((a) => a.enabled && a !== acct);
+      const lagging = others.filter((t) => !this.recentFills.some((r) =>
+        r.fill.contractId === fill.contractId && r.fill.action === fill.action && r.at >= at - GUARD_MOVED_WINDOW_MS && this.accountOfFill(r.client, r.fill) === t));
+      if (!others.length) return;
+      if (!lagging.length) {
+        log.debug(`garde-fou : ${acct.label} ${action} ${fill.qty} ${symbol} hors relais, mais tous les comptes ont bougé ensemble — rien à faire`);
+        return;
+      }
+      const ext = this.relayStats.extensionSeenAt;
+      const cause = !ext || Date.now() - ext > 60_000
+        ? "extension muette : onglet Tradovate fermé, extension désactivée ou dépassée"
+        : "ordre non intercepté : app Tradovate bureau/mobile, ordre antérieur au lancement, ou changement côté Tradovate";
+      const what = increasing ? "entrée" : net === 0 ? "sortie" : "inversion";
+      const error = `${what} passée hors relais (${cause}) — ${lagging.map((l) => l.label).join(", ")} ${lagging.length > 1 ? "n'ont" : "n'a"} pas suivi`;
+      log.warn(`⚠ RELAIS MANQUÉ ${acct.label} ${action.toUpperCase()} ${fill.qty} ${symbol} @${fill.price} : ${error}`);
+      this.guardStats.caught++;
+      this.guardStats.lastAt = Date.now();
+      const remaining = new Set(lagging);
+      const id = this.addIncident({
+        kind: "relay", account: acct, symbol, action, qty: fill.qty, error, critical: true, auto: false,
+        retry: () => this.guardCatchUp(acct, symbol!, action, fill.qty, remaining, increasing),
+      });
+      if (increasing && this.guardMode === "auto") void this.retryIncident(id, true);
+    } catch (err) {
+      log.warn(`garde-fou : ${String(err)}`);
+    }
+  }
+
+  /** Rattrapage au marché sur les comptes qui n'ont pas suivi (quantité × multiplicateur).
+   *  `remaining` est vidé au fur et à mesure : une relance ne renvoie jamais un compte déjà servi. */
+  private async guardCatchUp(source: GroupAccount, symbol: string, action: OrderAction, qty: number, remaining: Set<GroupAccount>, increasing: boolean): Promise<void> {
+    const legs: GroupLeg[] = [];
+    const errors: string[] = [];
+    await Promise.all([...remaining].map(async (a) => {
+      const q = relayQty(qty, source.multiplier, a.multiplier);
+      const leg: GroupLeg = { label: a.label, spec: a.spec, qty: q, status: "placed" };
+      legs.push(leg);
+      if (q <= 0) { leg.status = "skipped"; leg.error = "quantité 0 (multiplicateur)"; remaining.delete(a); return; }
+      if (!a.client.isReady || !a.accountId) { leg.status = "failed"; leg.error = "déconnecté"; errors.push(`${a.label}: déconnecté`); return; }
+      if (this.cfg.dryRun) { leg.status = "dry"; remaining.delete(a); log.info(`  [DRY] ${a.label}: rattrapage ${action} ${q} ${symbol} au marché`); return; }
+      try {
+        // Sortie / inversion : les SL/TP posés par le copieur sur ce contrat ne protègent plus
+        // la bonne position → annulés d'abord (sinon un stop rouvrirait l'inverse).
+        if (!increasing) await this.cancelExitsOf(a, symbol);
+        const res = await a.client.request("order/placeorder", { accountId: a.accountId, accountSpec: a.spec, action, symbol, orderQty: q, orderType: "Market", timeInForce: "Day", isAutomated: true });
+        const d = (res.d ?? {}) as Record<string, any>;
+        if (d.failureReason || d.failureText) throw new Error(String(d.failureText || d.failureReason));
+        leg.orderId = Number(d.orderId) || undefined;
+        this.remember(leg.orderId);
+        remaining.delete(a);
+        log.info(`  ${a.label}: rattrapage ${action} ${q} ${symbol} au marché #${leg.orderId ?? "?"}`);
+      } catch (err) {
+        leg.status = "failed";
+        leg.error = String((err as Error)?.message || err);
+        errors.push(`${a.label}: ${leg.error}`);
+        log.error(`  ${a.label}: rattrapage ÉCHEC — ${leg.error}`);
+      }
+    }));
+    this.emit({
+      ts: Date.now(), kind: "entry", symbol, action, qty, orderType: "Market",
+      ok: legs.filter((l) => l.status === "placed" || l.status === "dry").length, failed: errors.length, skipped: legs.filter((l) => l.status === "skipped").length,
+      legs, note: `rattrapage · relais manqué · ${source.label}`,
+    });
+    if (errors.length) throw new Error(errors.join(" · "));
+  }
+
+  private async cancelExitsOf(a: GroupAccount, symbol: string): Promise<void> {
+    const mine = [...this.exits.values()].filter((x) => x.account === a && x.symbol === symbol);
+    for (const x of mine) {
+      this.exits.delete(x.orderId);
+      try { await a.client.request("order/cancelorder", { orderId: x.orderId }); }
+      catch (err) { log.debug(`${a.label}: annulation ${x.role} #${x.orderId} avant rattrapage : ${String(err)}`); }
+    }
   }
 
   // --- flux de marché ---------------------------------------------------------------
@@ -1727,7 +1937,8 @@ export class GroupEngine {
           legs.push(leg);
           if (this.cfg.dryRun) { leg.status = "dry"; flattened++; continue; }
           try {
-            await a.client.request("order/liquidateposition", { accountId: a.accountId, contractId: p.contractId, admin: false });
+            const res = await a.client.request("order/liquidateposition", { accountId: a.accountId, contractId: p.contractId, admin: false });
+            this.remember(Number((res.d as Record<string, any> | undefined)?.orderId) || undefined);
             flattened++;
           } catch (err) {
             leg.status = "failed";
@@ -1735,7 +1946,10 @@ export class GroupEngine {
             errors.push(`${a.label} flatten ${p.symbol}: ${leg.error}`);
             this.addIncident({
               kind: "flatten", account: a, symbol: p.symbol, qty: Math.abs(p.netPos), error: leg.error, critical: true, auto: isTransportError(err),
-              retry: async () => { await a.client.request("order/liquidateposition", { accountId: a.accountId, contractId: p.contractId, admin: false }); },
+              retry: async () => {
+                const r2 = await a.client.request("order/liquidateposition", { accountId: a.accountId, contractId: p.contractId, admin: false });
+                this.remember(Number((r2.d as Record<string, any> | undefined)?.orderId) || undefined);
+              },
             });
           }
         }
@@ -1968,6 +2182,9 @@ export class GroupEngine {
         lastSeenAt: this.relayStats.lastSeenAt || null,
         lastDelayMs: this.relayStats.lastDelayMs ?? null,
         extensionSeenAt: this.relayStats.extensionSeenAt || null,
+        guard: this.guardMode,
+        guardCaught: this.guardStats.caught,
+        guardLastAt: this.guardStats.lastAt || null,
       },
       license: this.gate?.status() ?? null,
       connected,

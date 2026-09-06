@@ -97,6 +97,9 @@ export class TradovateClient {
   private positions = new Map<number, Map<number, { netPos: number; netPrice?: number }>>();
   /** orderId -> latest order entity (for "flatten all" — cancel working orders) */
   private orders = new Map<number, Order>();
+  /** orderId -> accountId, conservé même après l'état terminal (un fill peut être traité
+   *  après la suppression de l'ordre) — sert au garde-fou du relais. */
+  private orderAccounts = new Map<number, number>();
   /** orderId -> latest orderVersion (qty/type/price — needed to modify an order) */
   private versions = new Map<number, OrderVersion>();
   /** product root (ex. "MNQ") -> product info (tickSize, valuePerPoint) */
@@ -471,8 +474,22 @@ export class TradovateClient {
     if (ev.entityType !== "order") return;
     const o = ev.entity as unknown as Order;
     if (typeof o.id !== "number") return;
+    if (typeof o.accountId === "number") {
+      this.orderAccounts.set(o.id, o.accountId);
+      if (this.orderAccounts.size > 5000) this.orderAccounts.delete(this.orderAccounts.keys().next().value as number);
+    }
     if (o.ordStatus && TERMINAL_ORDER.has(o.ordStatus)) this.orders.delete(o.id);
     else this.orders.set(o.id, o);
+  }
+
+  /** Compte d'un ordre vu sur ce login (même terminé). */
+  accountOfOrder(orderId: number): number | undefined {
+    return this.orderAccounts.get(orderId) ?? this.orders.get(orderId)?.accountId;
+  }
+
+  /** Nom du contrat s'il est déjà en cache (synchrone ; sinon `contractName`). */
+  symbolOf(contractId: number): string | undefined {
+    return this.contractCache.get(contractId);
   }
 
   /** Live (non-terminal) orders for one account — what "flatten all" cancels. */

@@ -84,6 +84,11 @@ export interface Config {
    *  tous les comptes ont le MÊME stop et le même objectif ; "sameDistance" = chaque compte à
    *  N ticks de SON propre fill (stops parfois décalés d'un tick entre comptes). */
   bracketMode?: "samePrice" | "sameDistance";
+  /** Garde-fou du relais : un fill sur un compte du groupe qui ne vient ni du panneau ni du
+   *  relais (extension muette, app Tradovate bureau/mobile, changement côté Tradovate) →
+   *  incident « relais manqué ». "auto" (défaut) = les ENTRÉES sont rattrapées au marché sur
+   *  les comptes qui n'ont pas suivi ; "alert" = incident + bip, rattrapage sur clic ; "off". */
+  relayGuard?: "auto" | "alert" | "off";
   /** Mode mirror (historique) — dérivés de `accounts` s'ils sont absents. */
   master: AccountConfig;
   followers: FollowerConfig[];
@@ -204,6 +209,7 @@ export function loadConfig(path: string): Config {
     accounts,
     relay: c.relay !== false,
     bracketMode: c.bracketMode === "sameDistance" ? "sameDistance" : "samePrice",
+    relayGuard: c.relayGuard === "alert" || c.relayGuard === "off" ? c.relayGuard : "auto",
     master,
     followers,
     removedSpecs: c.removedSpecs,

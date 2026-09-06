@@ -58,6 +58,8 @@ function fakeClient(spec: string, calls: Call[], opts: { orders?: Record<number,
     workingOrders: () => opts.working ?? [],
     order: (id: number) => opts.orders?.[id],
     orderVersion: (id: number) => opts.versions?.[id],
+    accountOfOrder: (id: number) => opts.orders?.[id]?.accountId,
+    symbolOf: () => "MNQZ6",
     contractName: async () => "MNQZ6",
   };
 }
@@ -320,6 +322,139 @@ await t("breakeven en « même prix » : tous les stops reviennent à la référ
   calls.length = 0;
   await e.breakevenExits("MNQZ6|stop|Sell", 0);
   assert.deepEqual(calls.map((c) => [c.spec, c.body.stopPrice]), [["A", 21000], ["B", 21000]]);
+});
+
+// --- garde-fou du relais : fill hors relais → incident « relais manqué » + rattrapage --------
+const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+function guardEngine(opts: { guard?: "auto" | "alert" | "off"; posA?: any[] } = {}) {
+  const calls: Call[] = [];
+  const A = fakeClient("A", calls, { positions: opts.posA ?? [{ symbol: "MNQZ6", contractId: 42, netPos: 1 }] });
+  const B = fakeClient("B", calls);
+  const C = fakeClient("C", calls);
+  const { e, events } = engineWith([
+    { spec: "A", mult: 1, id: 1, client: A },
+    { spec: "B", mult: 1, id: 2, client: B },
+    { spec: "C", mult: 3, id: 3, client: C },
+  ], { relayGuard: opts.guard ?? "auto" } as any);
+  (e as any).guardGraceMs = 30;
+  return { e, events, calls, A, B, C };
+}
+const fill = (id: number, orderId: number, action: "Buy" | "Sell", qty = 1) => ({ id, orderId, contractId: 42, action, qty, price: 21000 });
+
+await t("garde-fou : entrée hors relais sur A → rattrapage auto au marché sur B et C (× multiplicateur)", async () => {
+  const { e, calls, A, B, events } = guardEngine();
+  await (e as any).onFill(A, fill(9001, 70001, "Buy"));
+  assert.equal(calls.length, 0); // rien avant le délai de grâce
+  await wait(120);
+  assert.deepEqual(calls.map((c) => [c.spec, c.endpoint, c.body.action, c.body.orderQty, c.body.orderType]), [["B", "order/placeorder", "Buy", 1, "Market"], ["C", "order/placeorder", "Buy", 3, "Market"]]);
+  const inc = e.dashboardState().incidents[0]!;
+  assert.equal(inc.kind, "relay"); assert.equal(inc.label, "A"); assert.equal(inc.status, "resolved"); assert.equal(inc.critical, true);
+  assert.match(inc.error, /entrée passée hors relais/);
+  assert.match(events.find((x) => x.kind === "entry")?.note ?? "", /rattrapage · relais manqué · A/);
+  assert.equal(e.dashboardState().relay.guardCaught, 1);
+  // le fill du rattrapage sur B (id connu) ne relance rien
+  const n0 = calls.length;
+  await (e as any).onFill(B, fill(9002, nextOrderId - 1, "Buy"));
+  await wait(80);
+  assert.equal(calls.length, n0);
+  assert.equal(e.dashboardState().incidents.length, 1);
+});
+
+await t("garde-fou : fill d'un ordre relayé (id via la réponse) ou du panneau → rien", async () => {
+  const { e, calls, A } = guardEngine();
+  await e.relay({ kind: "request", teeId: "g1", endpoint: "order/placeorder", body: { accountId: 1, accountSpec: "A", action: "Buy", symbol: "MNQZ6", orderQty: 1, orderType: "Market" } });
+  await e.relay({ kind: "response", teeId: "g1", status: 200, data: { orderId: 80001 } });
+  const ev = await e.placeGroupOrder({ symbol: "MNQZ6", action: "Buy", qty: 1, orderType: "Market" });
+  const idA = ev.legs.find((l) => l.label === "A")!.orderId!;
+  const n0 = calls.length;
+  await (e as any).onFill(A, fill(9101, 80001, "Buy"));
+  await (e as any).onFill(A, fill(9102, idA, "Buy"));
+  await wait(80);
+  assert.equal(calls.length, n0);
+  assert.equal(e.dashboardState().incidents.length, 0);
+});
+
+await t("garde-fou : relais récent sans réponse (id inconnu) et stratégie relayée → couverts, jamais de double", async () => {
+  const { e, calls, A, C } = guardEngine();
+  await e.relay({ kind: "request", teeId: "g2", endpoint: "order/placeorder", body: { accountId: 1, accountSpec: "A", action: "Buy", symbol: "MNQZ6", orderQty: 1, orderType: "Limit", price: 20990 } });
+  let n0 = calls.length;
+  await (e as any).onFill(A, fill(9201, 80002, "Buy"));
+  await wait(80);
+  assert.equal(calls.length, n0);
+  // stratégie : couverture par compte+symbole, même une fois le tee oublié
+  const params = JSON.stringify({ entryVersion: { orderQty: 1, orderType: "Market" }, brackets: [{ qty: 1, profitTarget: 10, stopLoss: -5 }] });
+  await e.relay({ kind: "request", teeId: "g3", endpoint: "orderStrategy/startOrderStrategy", body: { accountId: 1, accountSpec: "A", symbol: "MNQZ6", orderStrategyTypeId: 2, action: "Buy", params, uuid: "u" } });
+  (e as any).tees.clear();
+  n0 = calls.length;
+  await (e as any).onFill(A, fill(9202, 80003, "Buy"));   // entrée de la stratégie source
+  await (e as any).onFill(C, fill(9203, 80004, "Buy", 3)); // entrée de la stratégie copiée
+  await (e as any).onFill(A, fill(9204, 80005, "Sell"));  // stop de la stratégie source
+  await wait(80);
+  assert.equal(calls.length, n0);
+  assert.equal(e.dashboardState().incidents.length, 0);
+});
+
+await t("garde-fou : les autres comptes ont bougé ensemble → rien", async () => {
+  const { e, calls, A, B, C } = guardEngine();
+  await (e as any).onFill(A, fill(9301, 70301, "Buy"));
+  await (e as any).onFill(B, fill(9302, 70302, "Buy"));
+  await (e as any).onFill(C, fill(9303, 70303, "Buy", 3));
+  await wait(80);
+  assert.equal(calls.length, 0);
+  assert.equal(e.dashboardState().incidents.length, 0);
+});
+
+await t("garde-fou : sortie hors relais → incident ouvert, rattrapage sur clic (sorties connues annulées d'abord)", async () => {
+  const { e, calls, A } = guardEngine({ posA: [] }); // A revenu à plat
+  const acc = (e as any).accounts;
+  (e as any).registerExit({ orderId: 501, account: acc[1], contractId: 42, symbol: "MNQZ6", role: "stop", action: "Sell", price: 20990, qty: 1, groupId: "g", fillPrice: 21000 });
+  await (e as any).onFill(A, fill(9401, 70401, "Sell"));
+  await wait(80);
+  assert.equal(calls.length, 0);
+  const inc = e.dashboardState().incidents[0]!;
+  assert.equal(inc.kind, "relay"); assert.equal(inc.status, "open"); assert.equal(inc.auto, false);
+  assert.match(inc.error, /sortie passée hors relais/);
+  const r = await e.retryIncident(inc.id);
+  assert.equal(r.ok, true);
+  assert.deepEqual(calls.filter((c) => c.spec === "B").map((c) => [c.endpoint, c.body.orderId ?? c.body.orderQty]), [["order/cancelorder", 501], ["order/placeorder", 1]]);
+  assert.deepEqual(calls.filter((c) => c.spec === "C").map((c) => [c.endpoint, c.body.orderQty, c.body.action]), [["order/placeorder", 3, "Sell"]]);
+  assert.equal(e.dashboardState().incidents[0]!.status, "resolved");
+  assert.equal((e as any).exits.size, 0);
+});
+
+await t("garde-fou : mode alerte → incident sans rattrapage auto ; échec partiel → seuls les comptes restants sont relancés", async () => {
+  const { e, calls, A, C } = guardEngine({ guard: "alert" });
+  let failC = true;
+  C.request = async (endpoint: string, body: any) => { calls.push({ spec: "C", endpoint, body }); if (failC) throw new Error("socket closed"); return { s: 200, d: { orderId: ++nextOrderId } }; };
+  await (e as any).onFill(A, fill(9501, 70501, "Buy"));
+  await wait(80);
+  assert.equal(calls.length, 0);
+  const inc = e.dashboardState().incidents[0]!;
+  assert.equal(inc.status, "open");
+  const r1 = await e.retryIncident(inc.id);
+  assert.equal(r1.ok, false); assert.match(r1.error ?? "", /C: socket closed/);
+  assert.deepEqual(calls.map((c) => c.spec), ["B", "C"]);
+  failC = false;
+  const r2 = await e.retryIncident(inc.id);
+  assert.equal(r2.ok, true);
+  assert.deepEqual(calls.map((c) => c.spec), ["B", "C", "C"]); // B n'est pas renvoyé
+  assert.equal(e.dashboardState().incidents[0]!.status, "resolved");
+});
+
+await t("garde-fou : off, ou relais désactivé, ou compte hors groupe → rien", async () => {
+  const off = guardEngine({ guard: "off" });
+  await (off.e as any).onFill(off.A, fill(9601, 70601, "Buy"));
+  const g2 = guardEngine();
+  (g2.e as any).relayEnabled = false;
+  await (g2.e as any).onFill(g2.A, fill(9602, 70602, "Buy"));
+  const g3 = guardEngine();
+  (g3.e as any).accounts[0].enabled = false;
+  await (g3.e as any).onFill(g3.A, fill(9603, 70603, "Buy"));
+  await wait(80);
+  assert.equal(off.calls.length + g2.calls.length + g3.calls.length, 0);
+  assert.equal(off.e.dashboardState().incidents.length + g2.e.dashboardState().incidents.length + g3.e.dashboardState().incidents.length, 0);
+  assert.equal(g2.e.setRelayGuard("alert"), "alert");
+  assert.equal(g2.e.setRelayGuard("bidon"), "auto");
 });
 
 console.log(`\n${n} tests OK`);

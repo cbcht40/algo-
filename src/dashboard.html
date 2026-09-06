@@ -496,6 +496,7 @@
         <div class="tk-foot">
           <label class="opt" title="Demande une confirmation avant chaque envoi d'ordre"><input type="checkbox" id="confirm" checked /> Confirmer avant d'envoyer</label>
           <label class="opt" title="Bip sonore quand une action échoue sur un compte"><input type="checkbox" id="sound" checked /> Son</label>
+          <label class="opt" title="Garde-fou du relais : un ordre exécuté sur un compte du groupe SANS passer par le relais (extension muette, app Tradovate bureau/mobile, changement côté Tradovate) déclenche un incident « relais manqué » avec bip. Auto = les entrées sont rattrapées au marché sur les comptes qui n'ont pas suivi (sorties et inversions : sur clic). Alerte = bip + bouton Rattraper. Off = rien."><select id="guard" style="font-size:11px;padding:2px 6px"><option value="auto">Garde-fou : auto</option><option value="alert">Garde-fou : alerte</option><option value="off">Garde-fou : off</option></select></label>
           <button class="btn sm" id="skipInfo" style="display:none" title="Réaffiche toutes les confirmations que tu as masquées avec « Ne plus afficher ce message »"></button>
           <span class="sp"></span>
           <button class="btn sm" id="cancelAllBtn" title="Annule tous les ordres en attente (entrées, stops, objectifs) sur tous les comptes"><svg class="i"><use href="#i-ban"/></svg>Annuler les ordres</button>
@@ -1044,18 +1045,24 @@
     const open = list.filter(i => i.status === 'open' || i.status === 'retrying');
     // Bip sur tout nouvel incident ouvert.
     let fresh = false;
-    for (const i of list) { if (!seenIncidents.has(i.id)) { seenIncidents.add(i.id); if (i.status === 'open') fresh = true; } }
+    for (const i of list) {
+      if (seenIncidents.has(i.id)) continue;
+      seenIncidents.add(i.id);
+      // Bip sur tout nouvel incident ouvert — et sur tout relais manqué, même déjà rattrapé.
+      if (i.status === 'open' || i.kind === 'relay') fresh = true;
+      if (i.kind === 'relay') notify(`Relais manqué — ${i.label}`, (i.status === 'resolved' ? 'Rattrapé sur les autres comptes. ' : '') + (i.error || ''));
+    }
     if (fresh) beep('alert');
     if (!list.length) return '';
-    const KIND_I = { entry: 'entrée', bracket: 'SL/TP', modify: 'modification', cancel: 'annulation', flatten: 'mise à plat' };
+    const KIND_I = { entry: 'entrée', bracket: 'SL/TP', modify: 'modification', cancel: 'annulation', flatten: 'mise à plat', relay: 'relais manqué' };
     const crit = open.some(i => i.critical);
     const rows = list.slice(0, 8).map(i => `
       <div class="inc-row ${i.status}">
         <span class="who">${esc(i.label)}</span>
         <span>${KIND_I[i.kind] || i.kind}${i.action ? ' · ' + (i.action === 'Sell' ? 'vente' : 'achat') : ''}${i.qty ? ' × ' + i.qty : ''}${i.symbol ? ' ' + esc(i.symbol) : ''}</span>
-        ${i.critical && i.status === 'open' ? '<span class="crit">position sans protection / non clôturée</span>' : ''}
-        <span class="err">${i.status === 'resolved' ? '✓ relancé avec succès' : i.status === 'ignored' ? 'ignoré' : i.status === 'retrying' ? 'relance en cours…' : esc(i.error)}${i.attempts ? ` · ${i.attempts} tentative${i.attempts > 1 ? 's' : ''}` : ''}${i.auto && i.status === 'open' ? ' · relance auto à la reconnexion' : ''}</span>
-        ${i.status === 'open' ? `<button class="btn sm primary" onclick="retryIncident('${esc(i.id)}')">Réessayer</button><button class="btn sm" onclick="ignoreIncident('${esc(i.id)}')">Ignorer</button>` : ''}
+        ${i.critical && i.status === 'open' ? `<span class="crit">${i.kind === 'relay' ? 'un compte a bougé seul' : 'position sans protection / non clôturée'}</span>` : ''}
+        <span class="err">${i.status === 'resolved' ? (i.kind === 'relay' ? '✓ rattrapé au marché sur les autres comptes' : '✓ relancé avec succès') : i.status === 'ignored' ? 'ignoré' : i.status === 'retrying' ? (i.kind === 'relay' ? 'rattrapage en cours…' : 'relance en cours…') : esc(i.error)}${i.attempts ? ` · ${i.attempts} tentative${i.attempts > 1 ? 's' : ''}` : ''}${i.auto && i.status === 'open' ? ' · relance auto à la reconnexion' : ''}</span>
+        ${i.status === 'open' ? `<button class="btn sm primary" onclick="retryIncident('${esc(i.id)}')">${i.kind === 'relay' ? 'Rattraper au marché' : 'Réessayer'}</button><button class="btn sm" onclick="ignoreIncident('${esc(i.id)}')">Ignorer</button>` : ''}
       </div>`).join('');
     return `<div class="banner inc">
       <div class="inc-h">${ico('alert')}<span>${open.length ? `${open.length} action${open.length > 1 ? 's' : ''} non exécutée${open.length > 1 ? 's' : ''}${crit ? ' — vérifie tes positions' : ''}` : 'Incidents récents'}</span><span class="sp"></span>${open.length > 1 ? `<button class="btn sm" onclick="retryAll()">Tout réessayer</button>` : ''}</div>
@@ -1112,6 +1119,7 @@
       + (r.count ? `\n${r.count} ordre(s) relayé(s)` + (r.lastSeenAt ? `, dernier il y a ${ago(r.lastSeenAt)}` : '') + (r.lastDelayMs != null ? ` (navigateur → copieur : ${r.lastDelayMs} ms)` : '') : '')
       + (r.extensionSeenAt ? `\nExtension vue il y a ${ago(r.extensionSeenAt)}` : '\nExtension pas encore vue');
     $('tkMode').textContent = r.enabled ? 'relais Tradovate ON' : 'groupe';
+    if (document.activeElement !== $('guard')) $('guard').value = r.guard || 'auto';
     banners(s);
     // comptes — préserve la saisie en cours dans un champ multiplicateur
     const ae = document.activeElement;
@@ -1540,6 +1548,12 @@
   $('confirm').checked = S.confirm;
   $('sound').checked = S.sound;
   $('sound').addEventListener('change', () => { S.sound = $('sound').checked; saveS(); if (S.sound) beep('ok'); });
+  $('guard').addEventListener('change', async () => {
+    const mode = $('guard').value;
+    if (mode === 'off' && !(await confirmBox({ key: 'guardOff', title: 'Désactiver le garde-fou du relais ?', body: 'Un ordre exécuté sur un compte sans passer par le relais ne sera plus détecté : ce compte pourra rester seul en position.', ok: 'Désactiver' }))) { $('guard').value = (lastState && lastState.relay && lastState.relay.guard) || 'auto'; return; }
+    try { await post('/api/guard', { mode }); showToast(mode === 'off' ? 'Garde-fou du relais désactivé' : mode === 'alert' ? 'Garde-fou : alerte seule, rattrapage sur clic' : 'Garde-fou : rattrapage automatique des entrées'); } catch (_) { showToast('Serveur injoignable'); }
+    refresh();
+  });
   $('skipInfo').onclick = () => { SKIP = {}; saveSkip(); showToast('✓ Toutes les confirmations sont réaffichées'); };
   renderSkipInfo();
   if (S.sym) { $('sym').value = S.sym; }
