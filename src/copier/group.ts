@@ -41,6 +41,8 @@ const GUARD_TEE_WINDOW_MS = 20_000;
 const KNOWN_TTL_MS = 6 * 60 * 60_000;
 /** Login inconnu sans compte exploitable : délai avant de retenter une adoption. */
 const ADOPT_RETRY_MS = 10 * 60_000;
+/** Chien de garde des connexions : délai entre deux relances d'un même login. */
+const REVIVE_GAP_MS = 30_000;
 
 export type EntryType = "Market" | "Limit" | "Stop";
 export type TimeInForce = "Day" | "GTC";
@@ -161,6 +163,9 @@ interface ExitOrder {
   price: number;
   qty: number;
   groupId: string;
+  /** Ordre que le copieur n'a PAS posé (placé dans Tradovate) : affiché et déplaçable, mais
+   *  jamais annulé automatiquement par le garde anti-orphelins. */
+  foreign?: boolean;
   siblingId?: number;
   /** prix d'entrée du compte (fill) — sert au breakeven. */
   fillPrice?: number;
@@ -595,6 +600,8 @@ export class GroupEngine {
       this.purgePending();
       try { this.ensureMarketData(); this.reconcileMarketData(); } catch (err) { log.debug(`md: ${String(err)}`); }
       void this.retrySweep();
+      this.reviveStalledClients();
+      try { this.syncForeignExits(); } catch (err) { log.debug(`exits hors panneau : ${String(err)}`); }
     }, 3_000);
   }
 
@@ -797,6 +804,47 @@ export class GroupEngine {
     this.exits.set(x.orderId, x);
   }
 
+  /** Stops et objectifs posés AILLEURS que par le panneau : directement dans Tradovate, ou
+   *  par le relais sur les autres comptes. Le copieur les voit dans le flux d'ordres de chaque
+   *  compte — on les adopte pour qu'ils s'affichent sur le graphique et dans « Stops &
+   *  objectifs du groupe », et qu'ils se déplacent avec le groupe. Ceux que le copieur n'a pas
+   *  posés sont marqués `foreign` : le garde anti-orphelins ne les annule JAMAIS tout seul. */
+  private syncForeignExits(): void {
+    for (const a of this.accounts) {
+      if (!a.enabled || !a.client.isReady || !a.accountId) continue;
+      const positions = a.client.openPositions(a.accountId).filter((p) => p.netPos);
+      const working = a.client.workingOrders(a.accountId);
+      const liveIds = new Set(working.map((o) => o.id));
+      // Adoptions périmées : ordre exécuté ou annulé, ou compte revenu à plat sur ce contrat.
+      for (const [id, x] of this.exits) {
+        if (!x.foreign || x.account !== a) continue;
+        if (!liveIds.has(id) || !positions.some((p) => p.contractId === x.contractId)) this.exits.delete(id);
+      }
+      for (const o of working) {
+        if (this.exits.has(o.id)) continue;
+        const pos = positions.find((p) => p.contractId === o.contractId);
+        if (!pos) continue; // aucune position sur ce contrat → c'est un ordre d'entrée
+        if (o.action !== (pos.netPos > 0 ? "Sell" : "Buy")) continue; // même sens → renfort
+        const v = a.client.orderVersion(o.id);
+        if (!v) continue;
+        const role: "stop" | "target" | null =
+          v.orderType === "Stop" || v.orderType === "StopLimit" || v.orderType === "TrailingStop" ? "stop"
+            : v.orderType === "Limit" || v.orderType === "MIT" ? "target" : null;
+        if (!role) continue;
+        const price = role === "stop" ? v.stopPrice : v.price;
+        if (!(typeof price === "number" && price > 0)) continue;
+        const symbol = (a.client.symbolOf(o.contractId) ?? pos.symbol ?? "").toUpperCase();
+        if (!symbol || symbol.startsWith("#")) continue;
+        this.registerExit({
+          orderId: o.id, account: a, contractId: o.contractId, symbol, role, action: o.action,
+          price, qty: v.orderQty ?? Math.abs(pos.netPos), groupId: `hors-panneau|${a.key}|${o.contractId}`,
+          fillPrice: pos.netPrice, foreign: !this.known.has(o.id),
+        });
+        log.info(`${a.label} : ${role === "stop" ? "stop" : "objectif"} ${symbol} @${price} posé hors du panneau → suivi par le groupe`);
+      }
+    }
+  }
+
   private onOrder(client: TradovateClient, o: Order): void {
     if (typeof o.id !== "number") return;
     // Enfant d'un ordre connu (bracket OSO, jumeau OCO, ordre lié) → connu lui aussi.
@@ -884,6 +932,9 @@ export class GroupEngine {
         const live = client.order(x.orderId);
         if (live && TERMINAL.has(live.ordStatus)) { this.exits.delete(x.orderId); continue; }
         this.exits.delete(x.orderId);
+        // Ordre posé dans Tradovate : on cesse de le suivre, mais on n'annule jamais un ordre
+        // que le copieur n'a pas placé (Tradovate gère lui-même le jumeau d'un OCO).
+        if (x.foreign) continue;
         if (this.cfg.dryRun) continue;
         client.request("order/cancelorder", { orderId: x.orderId }).then(
           () => log.info(`${acct.label}: ${x.role === "stop" ? "stop" : "cible"} orphelin(e) annulé(e) (#${x.orderId}, compte à plat)`),
@@ -911,6 +962,22 @@ export class GroupEngine {
   }
 
   // --- instruments -------------------------------------------------------------------
+
+  /** Chien de garde des connexions : un login tombé sans reconnexion programmée (socket mort
+   *  pendant la veille du Mac, sans événement "close") reste déconnecté pour toujours. On le
+   *  relance nous-mêmes, au plus une fois par REVIVE_GAP_MS et par login. */
+  private reviveAt = new Map<TradovateClient, number>();
+  private reviveStalledClients(): void {
+    const now = Date.now();
+    for (const c of this.clients.values()) {
+      if (!c.isStalled) { this.reviveAt.delete(c); continue; }
+      const last = this.reviveAt.get(c) ?? 0;
+      if (now - last < REVIVE_GAP_MS) continue;
+      this.reviveAt.set(c, now);
+      log.warn(`${c.label} : session tombée sans reconnexion programmée — relance.`);
+      void c.refresh().catch((err) => log.debug(`${c.label} : relance échouée (${String((err as Error)?.message || err)})`));
+    }
+  }
 
   private anyReadyClient(): TradovateClient | undefined {
     return [...this.clients.values()].find((c) => c.isReady);

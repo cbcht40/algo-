@@ -60,7 +60,12 @@ const MAX_BACKOFF_MS = 30_000;
  *  à l'échéance — un Mac en veille gèle les minuteurs, celui-ci se déclencherait trop tard
  *  (jeton déjà expiré = session perdue jusqu'à ce que l'extension en repousse un). */
 const RENEW_CHECK_MS = 30_000;
-const RENEW_MARGIN_MS = 10 * 60_000;
+const RENEW_MARGIN_MS = 5 * 60_000;
+/** Plancher entre deux renouvellements. Renouveler invalide la session précédente côté
+ *  Tradovate : le websocket se ferme et se reconnecte. Un seul renouvellement par jeton
+ *  (voir `renewedFrom`) — sans ce garde-fou, la fenêtre de fin de vie du jeton provoquait
+ *  une reconnexion toutes les 30 s. */
+const RENEW_MIN_GAP_MS = 60_000;
 /** Order statuses that are done — never cancelled by "flatten all". */
 const TERMINAL_ORDER = new Set(["Canceled", "Cancelled", "Rejected", "Expired", "Filled", "Completed"]);
 
@@ -91,6 +96,9 @@ export class TradovateClient {
   private heartbeatTimer?: NodeJS.Timeout;
   private renewTimer?: NodeJS.Timeout;
   private renewing = false;
+  /** Jeton déjà passé au renouvellement (une tentative par jeton) + horodatage. */
+  private renewedFrom = "";
+  private lastRenewAt = 0;
   private reconnectTimer?: NodeJS.Timeout; // single-flight guard — at most one reconnect pending
   private backoff = 1_000;
   private closing = false;
@@ -241,16 +249,31 @@ export class TradovateClient {
     if (this.renewTimer.unref) this.renewTimer.unref();
   }
 
-  /** Renouvelle le jeton s'il expire bientôt (marge large). Jamais deux à la fois. */
+  /** Renouvelle le jeton s'il expire bientôt. UNE SEULE tentative par jeton : chaque
+   *  renouvellement referme le websocket (Tradovate invalide la session précédente), donc
+   *  réessayer en boucle déconnecte le compte toutes les 30 s. */
   private async renewIfDue(): Promise<void> {
     if (this.closing || this.renewing || !this.token?.expirationTime) return;
     const left = new Date(this.token.expirationTime).getTime() - Date.now();
     if (left > RENEW_MARGIN_MS) return;
+    const seed = this.token.accessToken;
+    if (seed === this.renewedFrom || Date.now() - this.lastRenewAt < RENEW_MIN_GAP_MS) return;
+    this.renewedFrom = seed;
+    this.lastRenewAt = Date.now();
+    const wasExp = new Date(this.token.expirationTime).getTime();
     this.renewing = true;
     try {
-      this.token = await renewAccessToken(this.restBase, this.token.accessToken);
+      this.token = await renewAccessToken(this.restBase, seed);
       this.saveToken();
-      this.log.debug(`Access token renewed (valide ${Math.round((new Date(this.token.expirationTime).getTime() - Date.now()) / 60000)} min).`);
+      const gained = new Date(this.token.expirationTime).getTime() - wasExp;
+      if (gained < 60_000) {
+        // Tradovate a rendu un jeton qui n'expire pas plus tard : le renouveler encore ne
+        // servirait qu'à couper la session en boucle. On attend un jeton frais de l'extension.
+        this.renewedFrom = this.token.accessToken;
+        this.log.warn("Renouvellement sans gain de validité — en attente d'un jeton frais (onglet Tradovate ouvert, extension active).");
+      } else {
+        this.log.debug(`Access token renewed (valide ${Math.round((new Date(this.token.expirationTime).getTime() - Date.now()) / 60000)} min).`);
+      }
     } catch (err) {
       this.log.warn(`Token renewal failed: ${String(err)} — re-authenticating…`);
       try {
@@ -684,5 +707,14 @@ export class TradovateClient {
 
   get isReady(): boolean {
     return this.authorized && this.ws?.readyState === WebSocket.OPEN;
+  }
+
+  /** Session tombée SANS reconnexion en attente : cas observé au réveil du Mac (le socket
+   *  meurt pendant la veille sans émettre "close", donc aucun reconnect n'est programmé et
+   *  le compte reste déconnecté indéfiniment). Le moteur s'en sert comme chien de garde. */
+  get isStalled(): boolean {
+    if (this.closing || this.isReady || this.reconnectTimer) return false;
+    const rs = this.ws?.readyState;
+    return rs !== WebSocket.CONNECTING;
   }
 }

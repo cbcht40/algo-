@@ -492,4 +492,57 @@ await t("token d'un login absent de la config → client créé (demo), comptes 
   assert.equal(e.dashboardState().accounts.length, 2);
 });
 
+// --- stops/objectifs posés DANS Tradovate : adoptés pour l'affichage et le groupe ----------
+await t("stop et objectif posés hors panneau → adoptés (affichés, déplaçables, jamais annulés seuls)", async () => {
+  const calls: Call[] = [];
+  const positions = [{ symbol: "MNQZ6", contractId: 42, netPos: 2, netPrice: 21000 }];
+  const working = [
+    { id: 900, accountId: 1, contractId: 42, action: "Sell", ordStatus: "Working" }, // stop
+    { id: 901, accountId: 1, contractId: 42, action: "Sell", ordStatus: "Working" }, // objectif
+    { id: 902, accountId: 1, contractId: 42, action: "Buy", ordStatus: "Working" },  // renfort → ignoré
+    { id: 903, accountId: 1, contractId: 77, action: "Sell", ordStatus: "Working" }, // autre contrat, pas de position → ignoré
+  ];
+  const versions = {
+    900: { orderQty: 2, orderType: "Stop", stopPrice: 20990 },
+    901: { orderQty: 2, orderType: "Limit", price: 21050 },
+    902: { orderQty: 1, orderType: "Limit", price: 20900 },
+    903: { orderQty: 1, orderType: "Stop", stopPrice: 100 },
+  };
+  const A = fakeClient("A", calls, { positions, working, versions });
+  const { e } = engineWith([{ spec: "A", mult: 1, id: 1, client: A }]);
+  (e as any).syncForeignExits();
+  const groups = e.exitGroups();
+  assert.deepEqual(groups.map((g) => [g.symbol, g.role, g.count, g.minPrice]), [["MNQZ6", "stop", 1, 20990], ["MNQZ6", "target", 1, 21050]]);
+  assert.equal((e as any).exits.get(900).foreign, true);
+  assert.equal((e as any).exits.get(900).fillPrice, 21000, "prix d'entrée repris de la position (pour le breakeven)");
+  assert.equal((e as any).exits.has(902), false, "ordre dans le sens de la position ignoré");
+  assert.equal((e as any).exits.has(903), false, "contrat sans position ignoré");
+  // idempotent
+  (e as any).syncForeignExits();
+  assert.equal((e as any).exits.size, 2);
+  // le stop adopté se déplace comme les autres (même prix pour tout le groupe)
+  calls.length = 0;
+  const m = await e.modifyExits("MNQZ6|stop|Sell", 20995);
+  assert.equal(m.modified, 1);
+  assert.deepEqual(calls.map((c) => [c.endpoint, c.body.orderId, c.body.stopPrice]), [["order/modifyorder", 900, 20995]]);
+  // compte revenu à plat → on cesse de les suivre SANS envoyer d'annulation
+  calls.length = 0;
+  positions.length = 0;
+  (e as any).syncForeignExits();
+  assert.equal((e as any).exits.size, 0);
+  assert.equal(calls.length, 0, "aucun ordre annulé : le copieur ne touche pas à ce qu'il n'a pas posé");
+});
+
+await t("ordre posé par le copieur puis retrouvé dans le flux → adopté mais PAS marqué « hors panneau »", async () => {
+  const calls: Call[] = [];
+  const positions = [{ symbol: "MNQZ6", contractId: 42, netPos: 1, netPrice: 21000 }];
+  const working = [{ id: 910, accountId: 1, contractId: 42, action: "Sell", ordStatus: "Working" }];
+  const versions = { 910: { orderQty: 1, orderType: "Stop", stopPrice: 20990 } };
+  const A = fakeClient("A", calls, { positions, working, versions });
+  const { e } = engineWith([{ spec: "A", mult: 1, id: 1, client: A }]);
+  (e as any).remember(910); // posé par le relais / le panneau
+  (e as any).syncForeignExits();
+  assert.equal((e as any).exits.get(910).foreign, false);
+});
+
 console.log(`\n${n} tests OK`);
