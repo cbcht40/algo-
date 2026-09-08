@@ -142,6 +142,10 @@ export function startDashboard(engine: GroupEngine, port = 7879): void {
           case "/api/relay":
             engine.setRelay(!!p.enabled);
             return json(200, { enabled: engine.isRelayEnabled });
+          case "/api/license": {
+            const r = await engine.setLicenseKey(String(p.key || ""));
+            return json(r.ok ? 200 : 400, r);
+          }
           case "/api/guard":
             return json(200, { mode: engine.setRelayGuard(String(p.mode || "auto")) });
           case "/api/account": {

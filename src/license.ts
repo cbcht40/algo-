@@ -109,6 +109,19 @@ export class LicenseGate {
     if (this.timer) clearTimeout(this.timer);
   }
 
+  /** Change la clé à chaud (panneau → « clé de licence »). L'état est REMIS À ZÉRO :
+   *  sans ça, le `lastUnlockAt` de l'ancienne clé maintiendrait la copie autorisée par la
+   *  fenêtre de grâce alors que la nouvelle clé est peut-être invalide. */
+  async setKey(key?: string): Promise<void> {
+    const k = key?.trim() || undefined;
+    if (k === this.key) { await this.check(); this.scheduleNext(); return; }
+    this.key = k;
+    this.state = { unlocked: false, reachable: false };
+    this.saveState();
+    await this.check();
+    this.scheduleNext();
+  }
+
   async check(): Promise<void> {
     if (!this.key) {
       this.state = { unlocked: false, reachable: true, error: "no license key", checkedAt: Date.now() };

@@ -81,6 +81,13 @@
   .btn.danger { color:var(--red); border-color:rgba(242,110,138,.5); background:transparent; }
   .btn.danger:hover { background:var(--red); color:#fff; border-color:var(--red); }
   .btn.lock.on { color:var(--amber); border-color:rgba(251,191,36,.5); background:rgba(251,191,36,.08); }
+  .keyform { display:inline-flex; gap:6px; align-items:center; margin-left:auto; flex-shrink:0; }
+  .keyform input {
+    width:230px; padding:5px 9px; border-radius:7px; font-size:12px;
+    background:rgba(0,0,0,.28); border:1px solid var(--border-2); color:var(--text); outline:none;
+  }
+  .keyform input:focus { border-color:var(--accent); }
+  @media (max-width: 720px) { .keyform { margin-left:0; width:100%; } .keyform input { flex:1; width:auto; } }
   .btn.relay.on { color:var(--accent2); border-color:rgba(79,124,255,.55); background:rgba(79,124,255,.1); box-shadow:0 0 14px rgba(79,124,255,.25); }
   .btn.relay.on svg { filter:drop-shadow(0 0 6px rgba(79,124,255,.9)); }
   .btn.primary { background:var(--neon); color:#fff; border-color:transparent; box-shadow:inset 0 1px 0 rgba(255,255,255,.22), 0 4px 18px rgba(99,91,255,.36); }
@@ -1072,14 +1079,34 @@
   window.ignoreIncident = async (id) => { try { await post('/api/incidents/ignore', { id }); } catch (_) {} refresh(); };
   window.retryAll = async () => { const open = ((lastState && lastState.incidents) || []).filter(i => i.status === 'open'); for (const i of open) { try { await post('/api/incidents/retry', { id: i.id }); } catch (_) {} } refresh(); };
 
+  // Saisie de la clé de licence DANS le panneau. Avant, régénérer sa clé sur le site
+  // verrouillait l'app sans recours : il fallait supprimer config.json à la main.
+  function keyForm(label) {
+    return `<span class="keyform">
+      <input id="licKey" type="password" placeholder="${label}" autocomplete="off" spellcheck="false" />
+      <button class="btn sm primary" onclick="saveLicense()">Valider</button>
+    </span>`;
+  }
+  window.saveLicense = async () => {
+    const el = document.getElementById('licKey');
+    const key = (el && el.value || '').trim();
+    if (!key) { showToast('Colle ta clé de licence'); return; }
+    try {
+      const d = await post('/api/license', { key });
+      if (d && d.ok) { showToast('✓ Clé enregistrée — trading débloqué'); if (el) el.value = ''; }
+      else showToast('Clé refusée : ' + ((d && d.error) || 'abonnement Edge requis'));
+    } catch (_) { showToast('Serveur injoignable'); }
+    refresh();
+  };
+
   function banners(s) {
     const out = [];
     const ib = incidentsBanner(s); if (ib) out.push(ib);
     const lic = s.license;
     if (lic && !(lic.licensed && !lic.graceActive)) {
       if (lic.graceActive) out.push(`<div class="banner warn">${ico('alert')}<span>Vérification de la licence impossible (backend injoignable) — le trading reste actif temporairement (grâce). Reconnecte-toi à internet.</span></div>`);
-      else if (!lic.hasKey) out.push(`<div class="banner err">${ico('lock')}<span>Trading désactivé — aucune clé de licence. Colle ta clé <b>Edge</b> dans <code>config.json</code> (champ <code>"license"</code>), puis relance.</span></div>`);
-      else out.push(`<div class="banner err">${ico('lock')}<span>Trading désactivé — abonnement <b>Edge</b> requis${lic.plan ? ` (plan actuel : <b>${esc(lic.plan)}</b>)` : ''}. La lecture reste disponible.</span></div>`);
+      else if (!lic.hasKey) out.push(`<div class="banner err">${ico('lock')}<span>Trading désactivé — aucune clé de licence.</span>${keyForm('Colle ta clé Edge')}</div>`);
+      else out.push(`<div class="banner err">${ico('lock')}<span>Trading désactivé — abonnement <b>Edge</b> requis${lic.plan ? ` (plan actuel : <b>${esc(lic.plan)}</b>)` : ''}. La lecture reste disponible.</span>${keyForm('Coller une autre clé')}</div>`);
     }
     if (s.dryRun) out.push(`<div class="banner info">${ico('shield')}<span><b>Simulation</b> — aucun ordre réel n’est envoyé (<code>dryRun</code>). Tout le reste fonctionne à l’identique.</span></div>`);
     const bad = (s.desync || []);

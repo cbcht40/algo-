@@ -70,6 +70,11 @@ export class JournalLink {
     this.onSync = opts.onSync;
   }
 
+  /** Suit le changement de clé fait depuis le panneau. */
+  setKey(key?: string): void {
+    this.key = key?.trim() || undefined;
+  }
+
   get enabled(): boolean {
     return !!this.key;
   }

@@ -478,6 +478,31 @@ export class GroupEngine {
     this.gate = gate;
   }
 
+  /** Change la clé de licence depuis le panneau et la PERSISTE dans config.json.
+   *  Avant, régénérer sa clé sur le site verrouillait l'app sans aucun recours : il n'existait
+   *  aucun écran pour en saisir une nouvelle, et le seul remède était de supprimer config.json
+   *  à la main. */
+  async setLicenseKey(key: string): Promise<{ ok: boolean; error?: string; license?: unknown }> {
+    const k = String(key || "").trim();
+    if (!k) return { ok: false, error: "clé vide" };
+    if (k.length > 500) return { ok: false, error: "clé invalide" };
+    // On VÉRIFIE avant d'enregistrer : une faute de frappe ne doit pas écraser une clé qui
+    // marchait. En cas de refus, l'ancienne clé est remise en place telle quelle.
+    const previous = this.cfg.license;
+    await this.gate?.setKey(k);
+    const st = this.gate?.status() as { licensed?: boolean; error?: string } | undefined;
+    if (this.gate && st && !st.licensed) {
+      log.warn(`Clé refusée : ${st.error ?? "abonnement Edge requis"} — l'ancienne clé est conservée.`);
+      await this.gate.setKey(previous);
+      return { ok: false, error: st.error || "clé refusée — abonnement Edge requis", license: this.gate.status() };
+    }
+    this.cfg.license = k;
+    this.persistConfig();
+    this.journal?.setKey(k);
+    log.info("Clé de licence mise à jour — copie autorisée.");
+    return { ok: true, license: st };
+  }
+
   setJournal(j: JournalLink): void {
     this.journal = j;
   }
