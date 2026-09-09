@@ -19,6 +19,12 @@ export interface ScoreRequest {
   accounts: number;
   source: string;
   ts: number;
+  /** Nature de la décision : entrée, renfort ou retournement. Les gestes de gestion (stop,
+   *  objectif, sortie) ne sont jamais envoyés — ils ne relancent aucune analyse. */
+  intent?: string;
+  /** Séance en cours, comptée par le Copieur lui-même : le journal du site a du retard de
+   *  synchro, donc « c'est ton 3ᵉ trade » ne peut pas venir de lui. */
+  session?: Record<string, unknown>;
 }
 
 export interface ScoreResult {

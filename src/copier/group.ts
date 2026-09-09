@@ -16,6 +16,7 @@ import { MarketDataClient, type Quote } from "../tradovate/marketData";
 import type { JournalLink, ScoreRequest } from "../journal";
 import type { Account, Environment, Fill, Order, OrderAction, OrderVersion, Position, PropsEvent } from "../tradovate/types";
 import { jwtClaims } from "../tradovate/tokenStore";
+import { classifyOrderIntent, intentNote, type IntentResult } from "./intent";
 
 const TERMINAL = new Set(["Canceled", "Cancelled", "Rejected", "Expired", "Filled", "Completed"]);
 const TERMINAL_CANCEL = new Set(["Canceled", "Cancelled", "Rejected", "Expired"]);
@@ -43,6 +44,8 @@ const KNOWN_TTL_MS = 6 * 60 * 60_000;
 const ADOPT_RETRY_MS = 10 * 60_000;
 /** Chien de garde des connexions : délai entre deux relances d'un même login. */
 const REVIVE_GAP_MS = 30_000;
+/** Une même décision ne doit pas être notée deux fois (panneau + relais, ou N comptes). */
+const SCORE_DEDUPE_MS = 45_000;
 
 export type EntryType = "Market" | "Limit" | "Stop";
 export type TimeInForce = "Day" | "GTC";
@@ -306,6 +309,10 @@ interface TeeLeg {
 
 interface TeeRecord {
   teeId: string;
+  /** Sens et taille quand ce tee est une ENTRÉE : sert à présumer la position quand le stop
+   *  arrive avant le retour du fill. */
+  entryDir?: 1 | -1;
+  entryQty?: number;
   ts: number;
   source: GroupAccount;
   endpoint: string;
@@ -411,6 +418,22 @@ export class GroupEngine {
   private guardMode: NonNullable<Config["relayGuard"]> = "auto";
   private guardGraceMs = GUARD_GRACE_MS;
   private guardStats = { caught: 0, lastAt: 0 };
+  /** Séance en cours — le Copieur compte SES décisions, pas le journal (qui a du retard de
+   *  synchro). Une décision = un geste du trader, jamais le nombre de comptes copiés. */
+  private session = {
+    dayKey: "",
+    decisions: 0,       // entrées / renforts / retournements notés aujourd'hui
+    closed: 0,          // décisions revenues à plat aujourd'hui
+    wins: 0,
+    losses: 0,
+    streak: 0,          // >0 gains d'affilée, <0 pertes d'affilée
+    lastEntryAt: 0,
+    lastExitAt: 0,
+    resumed: false,     // copieur démarré en cours de journée → le rang est un MINIMUM
+    startedAt: 0,
+  };
+  /** Positions déjà notées : évite deux avis pour la même décision (plusieurs comptes). */
+  private scoredKeys = new Map<string, number>();
 
   /** Incidents (échecs par compte) + leur relance. */
   private incidents = new Map<string, Incident & { retry: () => Promise<void>; account: GroupAccount }>();
@@ -947,6 +970,10 @@ export class GroupEngine {
     if (!acct) return;
     // Position clôturée → le journal tire le trade tout de suite (regroupé sur 8 s).
     this.journal?.positionClosed(acct.label);
+    // Séance : `noteDecisionClosed` ne compte QUE les décisions suivies. Quand N comptes du
+    // groupe reviennent à plat pour un seul geste du trader, on ne compte pas N sorties.
+    // Le P&L exact vient du courtier et n'est pas connu ici → série laissée neutre, jamais devinée.
+    for (const sgn of [1, -1]) this.noteDecisionClosed(`${acct.key}|${p.contractId}|${sgn}`, null);
     setTimeout(() => {
       const still = client.openPositions(p.accountId).some((q) => q.contractId === p.contractId && q.netPos);
       if (still) return;
@@ -1002,6 +1029,92 @@ export class GroupEngine {
       log.warn(`${c.label} : session tombée sans reconnexion programmée — relance.`);
       void c.refresh().catch((err) => log.debug(`${c.label} : relance échouée (${String((err as Error)?.message || err)})`));
     }
+  }
+
+
+  // --- séance en cours ---------------------------------------------------------------
+  /** Jour civil LOCAL du trader (le serveur raisonne en jour local, pas en UTC). */
+  private dayKeyNow(): string {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+
+  /** Remet les compteurs à zéro au changement de jour. `resumed` reste vrai tant qu'on n'a pas
+   *  vu le début de la journée : le rang annoncé n'est alors qu'un MINIMUM, et le dit. */
+  private rollSession(): void {
+    const key = this.dayKeyNow();
+    if (this.session.dayKey === key) return;
+    const first = !this.session.dayKey;
+    this.session = {
+      dayKey: key, decisions: 0, closed: 0, wins: 0, losses: 0, streak: 0,
+      lastEntryAt: 0, lastExitAt: 0,
+      // Au tout premier appel de la journée après un démarrage, on ne sait pas si le trader
+      // avait déjà tradé avant de lancer le Copieur.
+      resumed: first && new Date().getHours() > 0,
+      startedAt: Date.now(),
+    };
+  }
+
+  /** Contexte envoyé au site avec l'avis. Tout champ non mesurable reste `null`. */
+  private sessionContext(): Record<string, unknown> {
+    this.rollSession();
+    const s = this.session;
+    return {
+      dayKey: s.dayKey,
+      utcOffset: -new Date().getTimezoneOffset() / 60,
+      entryRank: s.decisions + 1,
+      decisionsToday: s.decisions,
+      closedToday: s.closed,
+      winsToday: s.wins,
+      lossesToday: s.losses,
+      streak: s.streak,
+      minutesSinceLastEntry: s.lastEntryAt ? Math.round((Date.now() - s.lastEntryAt) / 60000) : null,
+      minutesSinceLastExit: s.lastExitAt ? Math.round((Date.now() - s.lastExitAt) / 60000) : null,
+      resumed: s.resumed,
+      dryRun: !!this.cfg.dryRun,
+    };
+  }
+
+  /** Position à plat sur une décision : alimente la série du jour, une seule fois par décision
+   *  même quand N comptes reviennent à plat pour le même geste. */
+  private noteDecisionClosed(key: string, pnl: number | null): void {
+    this.rollSession();
+    if (!this.scoredKeys.has(key)) return;   // pas une décision suivie → on ne compte rien
+    this.scoredKeys.delete(key);
+    this.session.closed++;
+    this.session.lastExitAt = Date.now();
+    if (pnl === null) return;
+    if (pnl > 0) { this.session.wins++; this.session.streak = this.session.streak > 0 ? this.session.streak + 1 : 1; }
+    else if (pnl < 0) { this.session.losses++; this.session.streak = this.session.streak < 0 ? this.session.streak - 1 : -1; }
+  }
+
+  /** Classe l'ordre puis, si c'est une décision, demande l'avis. Sinon l'annonce dans le journal
+   *  du panneau — une suppression n'est JAMAIS silencieuse. */
+  private scoreIfDecision(
+    account: GroupAccount | undefined,
+    symbol: string,
+    contractId: number | undefined,
+    input: Parameters<typeof classifyOrderIntent>[0],
+    req: Omit<ScoreRequest, "ts">,
+  ): IntentResult {
+    const r = classifyOrderIntent(input);
+    if (!r.score) {
+      this.emit({
+        ts: Date.now(), kind: "info", symbol, action: req.action, qty: req.qty,
+        ok: 1, failed: 0, skipped: 0, legs: [], note: intentNote(r),
+      });
+      return r;
+    }
+    // Une seule note par décision, même si plusieurs comptes prennent la position.
+    const key = account && contractId ? `${account.key}|${contractId}|${input.action === "Buy" ? 1 : -1}` : `${symbol}|${input.action}`;
+    const last = this.scoredKeys.get(key) ?? 0;
+    if (Date.now() - last < SCORE_DEDUPE_MS) return r;
+    this.scoredKeys.set(key, Date.now());
+    this.rollSession();
+    this.session.decisions++;
+    this.session.lastEntryAt = Date.now();
+    this.askScore({ ...req, ts: Date.now(), intent: r.intent, session: this.sessionContext() });
+    return r;
   }
 
   private anyReadyClient(): TradovateClient | undefined {
@@ -1211,11 +1324,19 @@ export class GroupEngine {
     this.emit(ev);
     if (ev.ok > 0) {
       const q = this.md?.quote(symbol);
-      this.askScore({
+      const first = targets.find((a) => a.client.isReady && a.accountId);
+      const cid = inst?.contractId ?? this.instruments.get(symbol)?.contractId;
+      const net = first && cid
+        ? (first.client.openPositions(first.accountId).find((pp) => pp.contractId === cid)?.netPos ?? 0)
+        : null;
+      this.scoreIfDecision(first, symbol, cid, {
+        endpoint: "order/placeorder", action: req.action, orderType: req.orderType, qty, netPos: net,
+      }, {
         symbol, action: req.action, qty, orderType: req.orderType,
         price: req.price ?? req.stopPrice ?? q?.last ?? undefined,
-        stopTicks: req.bracket?.stopTicks, targetTicks: req.bracket?.targetTicks, tickSize: inst?.tickSize ?? this.instruments.get(symbol)?.tickSize,
-        accounts: ev.ok, source: "panneau", ts: Date.now(),
+        stopTicks: req.bracket?.stopTicks, targetTicks: req.bracket?.targetTicks,
+        tickSize: inst?.tickSize ?? this.instruments.get(symbol)?.tickSize,
+        accounts: ev.ok, source: "panneau",
       });
     }
     return ev;
@@ -1393,11 +1514,39 @@ export class GroupEngine {
           if (b && typeof b.profitTarget === "number") targetTicks = Math.round(Math.abs(b.profitTarget) / tick);
         } catch { /* params illisibles */ }
       }
-      this.askScore({
+      // Le stop posé APRÈS une entrée au marché arrive ici comme n'importe quel ordre : sans
+      // classification, il déclenchait une seconde note, contradictoire avec la première.
+      const contractId = inst?.contractId
+        ?? source.client.openPositions(source.accountId).find((pp) => pp.symbol.toUpperCase() === symbol)?.contractId;
+      const net = contractId
+        ? (source.client.openPositions(source.accountId).find((pp) => pp.contractId === contractId)?.netPos ?? 0)
+        : null;
+      // Entrée toute fraîche sur ce compte et ce symbole, dont le fill n'est pas encore revenu.
+      const since = Date.now() - GUARD_TEE_WINDOW_MS;
+      let presumedDir: 1 | -1 | undefined;
+      let presumedQty: number | undefined;
+      let recentEntry = false;
+      for (const prev of this.tees.values()) {
+        if (prev.ts < since || prev.teeId === teeId) continue;
+        if ((prev.symbol ?? "") !== symbol || prev.source !== source) continue;
+        if (!RELAY_ENTRY.has(prev.endpoint) || !prev.entryDir) continue;
+        recentEntry = true;
+        presumedDir = prev.entryDir;
+        presumedQty = prev.entryQty;
+      }
+      const cls = this.scoreIfDecision(source, symbol, contractId, {
+        endpoint, action, orderType, qty, netPos: net,
+        hasOther: !!(body as Record<string, any>).other,
+        otherOrderType: (body as Record<string, any>).other?.orderType,
+        presumedDir, presumedQty, recentEntry,
+      }, {
         symbol, action, qty, orderType, price: price ?? stopPrice ?? q?.last ?? undefined,
         stopTicks, targetTicks, tickSize: tick,
-        accounts: ev.ok + 1, source: `Tradovate (${source.label})`, ts: Date.now(),
+        accounts: ev.ok + 1, source: `Tradovate (${source.label})`,
       });
+      // Mémorisé pour l'ordre SUIVANT : c'est ce qui permet de reconnaître un stop posé
+      // avant même que le fill de l'entrée soit revenu.
+      if (cls.score) { rec.entryDir = action === "Buy" ? 1 : -1; rec.entryQty = qty; }
     }
     return { ok: ev.failed === 0, event: ev };
   }
