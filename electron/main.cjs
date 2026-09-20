@@ -163,9 +163,9 @@ function watchMaster() {
 const LOADING_HTML =
   'data:text/html,' +
   encodeURIComponent(
-    `<body style="background:#0a0a10;color:#9090aa;font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+    `<body style="background:radial-gradient(720px 420px at 50% 0%,rgba(99,91,255,.24),transparent 68%),#0a0817;color:#b3b1d6;font-family:-apple-system,BlinkMacSystemFont,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
        <div style="text-align:center">
-         <div style="font-size:18px;color:#ececf4;font-weight:700">Démarrage du copieur…</div>
+         <div style="font-size:18px;color:#f2f1fb;font-weight:700">Démarrage du copieur…</div>
          <div style="margin-top:8px;font-size:13px;font-family:ui-monospace,monospace">connexion à tes comptes</div>
        </div>
      </body>`,
@@ -174,10 +174,10 @@ const LOADING_HTML =
 const ERROR_HTML =
   'data:text/html,' +
   encodeURIComponent(
-    `<body style="background:#0a0a10;color:#fb7185;font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
+    `<body style="background:radial-gradient(720px 420px at 50% 0%,rgba(99,91,255,.2),transparent 68%),#0a0817;color:#f26e8a;font-family:-apple-system,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0">
        <div style="text-align:center;max-width:460px;padding:20px">
          <div style="font-size:18px;font-weight:700">Le copieur n'a pas démarré</div>
-         <div style="margin-top:8px;font-size:13px;color:#9090aa">Aucune configuration trouvée (ou une erreur au démarrage). L'assistant de configuration arrive bientôt.</div>
+         <div style="margin-top:8px;font-size:13px;color:#b3b1d6">Aucune configuration trouvée (ou une erreur au démarrage). L'assistant de configuration arrive bientôt.</div>
        </div>
      </body>`,
   )
@@ -259,7 +259,7 @@ async function createWindow() {
     height: 860,
     minWidth: 760,
     minHeight: 600,
-    backgroundColor: '#0a0a10',
+    backgroundColor: '#0a0817',
     title: 'Let Trade Copieur',
     ...(fs.existsSync(ICON_PNG) ? { icon: ICON_PNG } : {}),
     webPreferences: { contextIsolation: true, nodeIntegration: false, preload: path.join(__dirname, 'preload.cjs') },
