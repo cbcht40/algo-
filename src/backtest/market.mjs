@@ -8,7 +8,7 @@ export class MboMarket {
   constructor() {
     this.orders = new Map(); this.levels = { A: new Map(), B: new Map() }; this.prices = { A: [], B: [] }
     this.initialized = false; this.valid = false; this.corrupt = false; this.reason = 'Instantané du carnet en cours'
-    this.trades = []; this.clock = 0n; this.last = null; this.bars = []; this.footprints = new Map()
+    this.trades = []; this.clock = 0n; this.last = null; this.bars = []; this.footprints = new Map(); this.badTimestamp = false
   }
   level(side, price, delta) {
     const levels = this.levels[side], prices = this.prices[side]
@@ -24,6 +24,7 @@ export class MboMarket {
   apply(r) {
     const { action, side, size, flags } = r
     const price = BigInt(r.price), id = String(r.orderId)
+    if (!(flags & 32) && ((flags & 8) || BigInt(r.ts) < this.clock)) this.badTimestamp = true
     this.clock = BigInt(r.ts) > this.clock ? BigInt(r.ts) : this.clock
     if (action === 'R') {
       this.orders.clear(); this.levels.A.clear(); this.levels.B.clear(); this.prices = { A: [], B: [] }
@@ -44,13 +45,14 @@ export class MboMarket {
         if (price !== UNDEF && size > 0) { this.orders.set(id, { side, price, size }); this.level(side, price, size) }
       }
     }
+    if (flags & 4) { this.corrupt = true; this.reason = 'Trou de données signalé par Databento : nouveau carnet requis' }
     if (!(flags & 128)) return null
     const bid = this.best('B'), ask = this.best('A')
-    this.valid = this.initialized && !this.corrupt && !!bid && !!ask && BigInt(bid.price) < BigInt(ask.price)
+    this.valid = this.initialized && !this.corrupt && !this.badTimestamp && !!bid && !!ask && BigInt(bid.price) < BigInt(ask.price)
     if (this.valid) this.reason = null
-    else if (!this.corrupt) this.reason = 'Carnet vide, croisé ou en reconstruction'
-    const event = { ts: this.clock.toString(), bid, ask, valid: this.valid, reason: this.reason, trades: this.trades }
-    this.trades = []
+    else if (!this.corrupt) this.reason = this.badTimestamp ? 'Horodatage de réception incertain : opérations suspendues' : 'Carnet vide, croisé ou en reconstruction'
+    const event = { ts: this.clock.toString(), bid, ask, valid: this.valid, gap: this.corrupt || this.badTimestamp, reason: this.reason, trades: this.trades }
+    this.trades = []; this.badTimestamp = false
     for (const trade of event.trades) this.recordTrade(trade, this.clock)
     return event
   }

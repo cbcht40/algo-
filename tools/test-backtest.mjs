@@ -110,3 +110,13 @@ test('missing cancellations invalidate the book until a fresh reset', () => {
   m.apply(r('C', 'A', 9, 5000.25, 1)); assert.equal(m.valid, false)
   m.apply(r('A', 'A', 3, 5001, 1)); assert.equal(m.valid, false)
 })
+test('provider gap and timestamp flags suspend execution, while snapshot timestamps remain usable', () => {
+  const m = new MboMarket()
+  m.apply(r('R','N',0,0,0,40)); m.apply(r('A','B',1,5000,5,40))
+  assert.equal(m.apply(r('A','A',2,5000.25,5,168)).valid,true)
+  assert.equal(m.apply(r('N','N',0,0,0,136)).valid,false)
+  assert.equal(m.apply(r('N','N',0,0,0)).valid,true)
+  assert.equal(m.apply(r('N','N',0,0,0,132)).gap,true)
+  assert.equal(m.apply(r('N','N',0,0,0)).valid,false)
+  m.apply(r('R','N',0,0,0));m.apply(r('A','B',1,5000,5));assert.equal(m.apply(r('A','A',2,5000.25,5)).valid,true)
+})
