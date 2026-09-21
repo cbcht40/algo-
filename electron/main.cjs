@@ -1,7 +1,7 @@
 // Electron shell for the Tradovate copier. Double-click → launches the copier
 // (if it isn't already running) and shows the local dashboard as the app window.
 // No terminal, no browser. Closing the app stops the copier it started.
-const { app, BrowserWindow, shell, ipcMain, screen, Notification } = require('electron')
+const { app, BrowserWindow, shell, ipcMain, screen, Notification, dialog, powerSaveBlocker, Menu, Tray, nativeImage } = require('electron')
 const { spawn } = require('node:child_process')
 const path = require('node:path')
 const http = require('node:http')
@@ -29,6 +29,72 @@ let win = null
 let quitting = false
 let restarting = false
 let lastWasSetup = false
+
+// The replay companion starts independently: it never imports or calls the order copier.
+let backtestProcess = null
+let backtestWindow = null
+let backtestCode = null
+let backtestReady = false
+let backtestError = null
+let backtestPower = null
+let backtestTray = null
+let backtestOnly = process.argv.some(a => a === '--backtest-only' || a.startsWith('lettrade://backtest'))
+const primaryInstance = app.requestSingleInstanceLock()
+if (!primaryInstance) app.quit()
+app.on('second-instance', (_event, argv) => {
+  if (argv.some(a => a.startsWith('lettrade://backtest') || a === '--backtest-only')) showBacktest()
+  else if (win && !win.isDestroyed()) { win.show(); win.focus() }
+  else showBacktest()
+})
+function startBacktest() {
+  if (backtestProcess) return
+  backtestError = null
+  const entry = app.isPackaged ? path.join(ROOT, 'build/backtest/serve.mjs') : path.join(ROOT, 'src/backtest/serve.mjs')
+  const decoder = app.isPackaged ? path.join(ROOT, 'build/backtest', process.platform === 'win32' ? 'dbn.exe' : 'dbn')
+    : path.join(ROOT, 'build/backtest-native', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'dbn.exe' : 'dbn')
+  backtestProcess = spawn(process.execPath, [entry], { cwd: ROOT,
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', BACKTEST_PACKAGED: app.isPackaged ? '1' : '',
+      BACKTEST_DATA_DIR: path.join(dataDir(), 'backtesting'), BACKTEST_DECODER: decoder },
+    stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })
+  backtestProcess.stdout.on('data', () => {})
+  backtestProcess.stderr.on('data', data => { if (data.toString().includes('EADDRINUSE')) backtestError = 'Le port du compagnon est déjà utilisé. Ferme l’autre instance de Let-Trade puis réessaie.' })
+  backtestProcess.on('message', async message => {
+    if (message.type === 'backtest:pairCode') { backtestCode = message.code; backtestWindow?.webContents.send('backtest:changed') }
+    if (message.type === 'backtest:ready') { backtestReady = true; backtestWindow?.webContents.send('backtest:changed') }
+    if (message.type === 'backtest:activity') {
+      if (message.active && backtestPower == null) backtestPower = powerSaveBlocker.start('prevent-app-suspension')
+      if (!message.active && backtestPower != null) { powerSaveBlocker.stop(backtestPower); backtestPower = null }
+    }
+    if (message.type === 'backtest:pick') {
+      const result = await dialog.showOpenDialog({ title: 'Importer des données Databento',
+        properties: message.kind === 'directory' ? ['openDirectory'] : ['openFile', 'multiSelections'],
+        filters: message.kind === 'directory' ? undefined : [{ name: 'Databento DBN', extensions: ['dbn', 'zst'] }] })
+      backtestProcess?.send({ type: 'backtest:pickResult', id: message.id, paths: result.canceled ? [] : result.filePaths })
+    }
+  })
+  backtestProcess.on('error', () => { backtestReady = false; backtestError = 'Le moteur local n’a pas pu démarrer. Réessaie avec le bouton ci-dessous.'; backtestWindow?.webContents.send('backtest:changed') })
+  backtestProcess.on('exit', () => { backtestProcess = null; backtestReady = false; backtestCode = null; backtestError ||= 'Le moteur local est arrêté. Réessaie avec le bouton ci-dessous.'; if (backtestPower != null) powerSaveBlocker.stop(backtestPower); backtestPower = null; backtestWindow?.webContents.send('backtest:changed') })
+}
+function showBacktest() {
+  startBacktest()
+  if (backtestWindow && !backtestWindow.isDestroyed()) { backtestWindow.show(); backtestWindow.focus(); return }
+  backtestWindow = new BrowserWindow({ width: 620, height: 550, minWidth: 460, minHeight: 480,
+    title: 'Let-Trade · Backtesting', backgroundColor: '#0a0817',
+    webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true, preload: path.join(__dirname, 'preload.cjs') } })
+  backtestWindow.loadFile(path.join(__dirname, 'backtest.html'))
+  backtestWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  backtestWindow.on('closed', () => { backtestWindow = null })
+}
+const fromBacktestWindow = event => backtestWindow && event.sender.id === backtestWindow.webContents.id
+ipcMain.handle('backtest:info', event => fromBacktestWindow(event) ? { code: backtestCode, ready: backtestReady, error: backtestError } : null)
+ipcMain.on('backtest:newCode', event => { if (fromBacktestWindow(event)) { if (!backtestProcess) startBacktest(); else backtestProcess.send({ type: 'backtest:newCode' }) } })
+ipcMain.on('backtest:site', event => { if (fromBacktestWindow(event)) shell.openExternal('https://let-tradejournal.com/backtest') })
+ipcMain.on('backtest:open', () => showBacktest())
+app.on('open-url', (event, url) => {
+  if (url !== 'lettrade://backtest' && url !== 'lettrade://backtest/') return
+  event.preventDefault(); backtestOnly = true
+  if (app.isReady()) showBacktest()
+})
 
 // État de mise à jour poussé vers la page dashboard (bandeau + bouton « Installer »).
 // Le preload redemande le statut courant ('update:ready') à chaque chargement de page,
@@ -275,11 +341,26 @@ async function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  if (!primaryInstance) return
   applyDevIcon()
+  startBacktest()
+  if (app.isPackaged) app.setAsDefaultProtocolClient('lettrade')
+  try {
+    backtestTray = new Tray(nativeImage.createFromPath(ICON_PNG).resize({ width: 18, height: 18 }))
+    backtestTray.setToolTip('Let-Trade · Copieur et Backtesting')
+    backtestTray.setContextMenu(Menu.buildFromTemplate([
+      { label: 'Backtesting · connexion au site', click: showBacktest },
+      { label: 'Afficher le Copieur', click: async () => { if (win) win.show(); else { if (!(await dashboardUp())) startCopier(); await createWindow(); watchMaster() } } },
+      { type: 'separator' }, { label: 'Quitter Let-Trade', click: () => app.quit() },
+    ]))
+  } catch { /* Dock/menu remain available when the tray is unavailable. */ }
+  if (backtestOnly) showBacktest()
+  else {
   // Reuse an already-running copier (e.g. the launchd service); else start one.
   if (!(await dashboardUp())) startCopier()
   await createWindow()
   watchMaster()
+  }
   // Check for updates (packaged builds only). On télécharge en fond ET on pousse l'état
   // vers le dashboard → bandeau in-app « Mise à jour prête → Installer et redémarrer »
   // (plutôt que la notif système anglaise + install silencieuse au quit).
@@ -296,13 +377,13 @@ app.whenReady().then(async () => {
     autoUpdater.checkForUpdates().catch((err) => console.warn('[update]', err?.message || err))
   }
   app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    if (BrowserWindow.getAllWindows().length === 0) showBacktest()
   })
 })
 
 app.on('window-all-closed', () => {
   if (copier) copier.kill()
-  if (process.platform !== 'darwin') app.quit()
+  if (process.platform !== 'darwin' && !backtestTray) app.quit()
 })
 // La mini-fenêtre ne compte pas comme « la » fenêtre : fermer le Copieur = tout fermer.
 app.on('browser-window-closed', (_e, w) => {
@@ -311,6 +392,8 @@ app.on('browser-window-closed', (_e, w) => {
 
 app.on('before-quit', () => {
   quitting = true
+  if (backtestProcess) backtestProcess.kill()
+  if (backtestPower != null) powerSaveBlocker.stop(backtestPower)
   if (copier) {
     copier.kill()
     copier = null

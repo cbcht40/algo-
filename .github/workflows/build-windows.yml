@@ -25,6 +25,8 @@ jobs:
           node-version: '20'
           cache: 'npm'
       - run: npm ci
+      - name: Verify replay engine and local isolation
+        run: npm run test:backtest
       - name: Build the Windows installer
         run: npm run dist:win
       - name: Upload installer artifact

@@ -24,3 +24,7 @@ logs/
 .DS_Store
 .signing/
 .copier-bridge.json
+backtesting/
+.backtest-data/
+.backtest-qa/
+release-backtest-*/

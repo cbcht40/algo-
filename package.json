@@ -1,6 +1,6 @@
 {
   "name": "tradovate-copier",
-  "version": "0.5.8",
+  "version": "0.6.0",
   "description": "Panneau d'ordre multi-comptes Tradovate : chaque ordre part sur tous les comptes en même temps (plus de maître/followers).",
   "author": "Let-Trade Journal",
   "type": "module",
@@ -22,7 +22,9 @@
     "app": "electron electron/main.cjs",
     "bundle": "node scripts/bundle.mjs",
     "dist": "npm run bundle && electron-builder --mac --publish never",
-    "dist:win": "npm run bundle && electron-builder --win --publish never"
+    "dist:win": "npm run bundle && electron-builder --win --publish never",
+    "test:backtest": "node --test tools/test-backtest.mjs tools/test-backtest-integration.mjs",
+    "app:backtest": "electron electron/main.cjs --backtest-only"
   },
   "dependencies": {
     "electron-updater": "^6.3.9",
@@ -48,7 +50,8 @@
       "electron/**",
       "build/**",
       "extension/**",
-      "package.json"
+      "package.json",
+      "!build/backtest-native/**"
     ],
     "directories": {
       "output": "release"
@@ -74,6 +77,14 @@
     "win": {
       "target": "nsis",
       "icon": "icon.png"
-    }
+    },
+    "protocols": [
+      {
+        "name": "Let-Trade Backtesting",
+        "schemes": [
+          "lettrade"
+        ]
+      }
+    ]
   }
 }

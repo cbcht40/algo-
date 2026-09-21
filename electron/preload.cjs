@@ -5,6 +5,14 @@
 // savoir qu'elle tourne DANS l'app (et pas dans un navigateur classique).
 const { contextBridge, ipcRenderer } = require('electron')
 
+contextBridge.exposeInMainWorld('electronBacktest', {
+  info: () => ipcRenderer.invoke('backtest:info'),
+  newCode: () => ipcRenderer.send('backtest:newCode'),
+  openSite: () => ipcRenderer.send('backtest:site'),
+  open: () => ipcRenderer.send('backtest:open'),
+  onChange: cb => ipcRenderer.on('backtest:changed', () => cb()),
+})
+
 contextBridge.exposeInMainWorld('electronUpdate', {
   // cb reçoit { state:'none'|'available'|'downloading'|'ready', version?, percent? }
   onStatus: (cb) => {

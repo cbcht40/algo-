@@ -4,8 +4,20 @@
 // at runtime via import.meta.url).
 import { build } from "esbuild";
 import { copyFileSync, mkdirSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 
 mkdirSync("build", { recursive: true });
+
+execFileSync(process.execPath, ['scripts/prepare-backtest-decoder.mjs'], { stdio: 'inherit' });
+mkdirSync('build/backtest', { recursive: true });
+const nativeDir = `build/backtest-native/${process.platform}-${process.arch}`;
+const decoderName = process.platform === 'win32' ? 'dbn.exe' : 'dbn';
+copyFileSync(`${nativeDir}/${decoderName}`, `build/backtest/${decoderName}`);
+copyFileSync(`${nativeDir}/LICENSE`, 'build/backtest/DBN-LICENSE');
+for (const file of ['bridge.html','bridge.js','bridge.css']) copyFileSync(`src/backtest/${file}`, `build/backtest/${file}`);
+await build({ entryPoints: ['src/backtest/serve.mjs', 'src/backtest/import-worker.mjs'],
+  bundle: true, platform: 'node', format: 'esm', target: 'node20', outdir: 'build/backtest',
+  outExtension: { '.js': '.mjs' }, logLevel: 'info' });
 
 await build({
   entryPoints: ["src/index.ts"],
