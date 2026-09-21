@@ -152,6 +152,10 @@
   .ai .meta { font-family:var(--mono); font-size:11px; color:var(--txt3); margin-top:6px; }
   .ai .warn { display:flex; gap:7px; align-items:flex-start; color:var(--amber); font-size:12.5px; margin-top:8px; line-height:1.4; }
   .ai .warn svg.i { flex:none; margin-top:1px; }
+  .ai-toggle { display:inline-flex; align-items:center; gap:7px; color:var(--txt2); font-size:11px; font-weight:600; cursor:pointer; white-space:nowrap; }
+  .ai-toggle input { accent-color:var(--accent); width:16px; height:16px; cursor:pointer; }
+  .ai-toggle-row { display:flex; align-items:center; flex-wrap:wrap; gap:5px 10px; margin:0 16px 12px; padding:10px 12px; border:1px solid var(--border); border-radius:10px; background:var(--card3); }
+  .ai-toggle-row>span { color:var(--txt3); font-size:11px; line-height:1.35; }
 
   /* ── panneau d'ordre ───────────────────────────────────────────────────── */
   .ticket { padding-bottom:12px; }
@@ -517,6 +521,7 @@
     <!-- ── JOURNAL & AVIS IA ── -->
     <section class="card" id="aiCard">
       <div class="card-h">Journal &amp; avis IA <span class="sp"></span><span class="cnt" id="jrnStatus"></span><button class="btn sm" id="jrnSyncBtn" title="Demande au journal de récupérer tes trades Tradovate maintenant (sinon c'est automatique à chaque clôture)">Synchroniser</button></div>
+      <div class="ai-toggle-row"><label class="ai-toggle" title="L'avis IA analyse une entrée après l'envoi de l'ordre. Le couper n'affecte ni les ordres, ni le relais, ni la synchronisation du journal."><input type="checkbox" id="aiScoreToggle" />Avis IA après entrée</label><span>Facultatif · sans effet sur la copie des ordres.</span></div>
       <div class="ai" id="ai"></div>
       <div class="scores" id="scores"></div>
     </section>
@@ -1188,7 +1193,7 @@
       else if (Notification.permission !== 'denied') Notification.requestPermission().then(p => { if (p === 'granted') new Notification(title, { body, silent: true }); });
     } catch (_) {}
   }
-  const VERDICT = { go: 'Favorable', caution: 'Prudence', avoid: 'À éviter' };
+  const VERDICT = { go: 'Aligné', caution: 'À examiner', avoid: 'Écart observé' };
   const entryMeta = (sc) => { const e = sc.entry || {}; return `${e.action === 'Sell' ? 'VENTE' : 'ACHAT'} ${e.qty || ''} ${esc(e.symbol || '')}${e.price ? ' @ ' + e.price : ''} · ${fmtTime(sc.ts)} · ${esc(e.source || '')}${sc.ms ? ` · ${(sc.ms / 1000).toFixed(1)} s` : ''}`; };
   let scoreStore = []; // derniers avis (pour ouvrir un rapport depuis une pastille de l'historique)
   // Pastille flottante : surgit à chaque nouvel avis, clic → rapport de la position.
@@ -1212,7 +1217,7 @@
     const v = sc.error ? 'err' : (sc.verdict || 'caution');
     el.className = `ai-pill show ${v}`;
     el.style.setProperty('--p', sc.error ? 0 : Math.max(4, sc.score));
-    el.innerHTML = `<div class="ring" style="--p:${sc.error ? 0 : Math.max(4, sc.score)}"><span>${sc.error ? '?' : sc.score}<small>${sc.error ? '' : '%'}</small></span></div>
+    el.innerHTML = `<div class="ring" style="--p:${sc.error ? 0 : Math.max(4, sc.score)}"><span>${sc.error ? '?' : sc.score}<small>${sc.error ? '' : '/100'}</small></span></div>
       <div class="txt"><b>${esc(sc.error ? 'Avis IA indisponible' : (sc.headline || VERDICT[v] || 'Avis IA'))}</b><span>${e.action === 'Sell' ? 'vente' : 'achat'} ${e.qty || ''} ${esc(e.symbol || '')} · clique pour le rapport</span></div>
       <button class="x" title="Masquer" aria-label="Masquer">${ico('x')}</button>`;
     el.hidden = false;
@@ -1229,11 +1234,11 @@
     const body = sc.error
       ? `<div class="rep ${v}"><div class="head"><div class="ring" style="--p:0"><span>?</span></div><div><div class="verdict">indisponible</div><div class="headline">L’avis IA n’a pas pu être calculé.</div><div class="meta">${entryMeta(sc)}</div></div></div><div class="report">${esc(sc.error)}</div></div>`
       : `<div class="rep ${v}">
-          <div class="head"><div class="ring" style="--p:${Math.max(4, sc.score)}"><span>${sc.score}<small>%</small></span></div><div><div class="verdict">${VERDICT[v] || v}</div><div class="headline">${esc(sc.headline || '')}</div><div class="meta">${entryMeta(sc)}</div></div></div>
+          <div class="head"><div class="ring" style="--p:${Math.max(4, sc.score)}"><span>${sc.score}<small>/100</small></span></div><div><div class="verdict">${VERDICT[v] || v}</div><div class="headline">${esc(sc.headline || '')}</div><div class="meta">${entryMeta(sc)}</div></div></div>
           ${sc.report ? `<div class="report">${esc(sc.report)}</div>` : ''}
           ${(sc.reasons || []).length ? `<ul>${sc.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}
           ${sc.warning ? `<div class="warn">${ico('alert')}<span>${esc(sc.warning)}</span></div>` : ''}
-          <div class="ctx">Basé sur ${ctx.decisions != null ? ctx.decisions + ' décision(s) de ton journal' : 'ton journal'}${ctx.todayCount != null ? ` · ${ctx.todayCount} trade(s) aujourd’hui (${(ctx.todayPnl || 0) >= 0 ? '+' : ''}${ctx.todayPnl || 0} $)` : ''}${ctx.reports ? ` · ${ctx.reports} analyse(s) IA récentes` : ''}${sc.ms ? ` · calculé en ${(sc.ms / 1000).toFixed(1)} s` : ''}</div>
+          <div class="ctx">Alignement avec ton historique, pas probabilité de gain. Basé sur ${ctx.decisions != null ? ctx.decisions + ' décision(s) de ton journal' : 'ton journal'}${ctx.todayCount != null ? ` · ${ctx.todayCount} trade(s) aujourd’hui (${(ctx.todayPnl || 0) >= 0 ? '+' : ''}${ctx.todayPnl || 0} $)` : ''}${ctx.reports ? ` · ${ctx.reports} analyse(s) IA récentes` : ''}${sc.ms ? ` · calculé en ${(sc.ms / 1000).toFixed(1)} s` : ''}</div>
         </div>`;
     infoBox({ title: 'Rapport de la position', html: body, ok: 'Fermer' });
   }
@@ -1254,6 +1259,8 @@
   function renderAi(s) {
     const j = s.journal;
     const st = $('jrnStatus'), btn = $('jrnSyncBtn'), box = $('ai'), list = $('scores');
+    const toggle = $('aiScoreToggle');
+    if (!toggle.disabled) toggle.checked = j?.scoreEnabled !== false;
     if (!j || !j.enabled) {
       st.textContent = 'journal non relié';
       btn.style.display = 'none'; list.innerHTML = '';
@@ -1268,11 +1275,19 @@
     st.title = ls ? (ls.error ? ls.error : `Dernière synchro il y a ${ago(ls.at)} : ${ls.inserted} trade(s) ajouté(s), ${ls.updated} mis à jour${ls.hint ? '\n' + ls.hint : ''}`) : 'Les trades clôturés sont ajoutés au journal automatiquement (8 s après la clôture).';
     scoreStore = j.scores || (j.lastScore ? [j.lastScore] : []);
     const sc = j.lastScore;
-    box.innerHTML = sc
-      ? `<div class="meta">Dernier avis : <b style="color:var(--txt)">${sc.error ? 'indisponible' : sc.score + ' % · ' + (VERDICT[sc.verdict] || '')}</b> · ${entryMeta(sc)}</div>`
-      : `<div class="empty" style="margin:0">À chaque prise de position (panneau ou Tradovate), une pastille apparaît avec la note de l’entrée sur 100. Clique dessus pour le rapport.</div>`;
-    list.innerHTML = scoreStore.map(x => { const e = x.entry || {}; const v = x.error ? 'err' : (x.verdict || 'caution'); return `<span class="sc ${v}" onclick="openScore(${x.ts})" title="${esc(x.headline || x.error || '')}"><b>${x.error ? '?' : x.score + '%'}</b>${e.action === 'Sell' ? 'V' : 'A'} ${esc(e.symbol || '')} · ${fmtTime(x.ts)}</span>`; }).join('');
+    box.innerHTML = !j.scoreEnabled
+      ? '<div class="empty" style="margin:0">Avis IA désactivés. Tes ordres, le relais et la synchronisation du journal continuent normalement.</div>'
+      : sc
+      ? `<div class="meta">Dernier avis : <b style="color:var(--txt)">${sc.error ? 'indisponible' : sc.score + '/100 · ' + (VERDICT[sc.verdict] || '')}</b> · ${entryMeta(sc)}</div>`
+      : `<div class="empty" style="margin:0">Après une entrée, l’IA compare ton geste à ton historique. Elle ne bloque jamais un ordre ; clique sur l’avis pour lire les éléments observés.</div>`;
+    list.innerHTML = scoreStore.map(x => { const e = x.entry || {}; const v = x.error ? 'err' : (x.verdict || 'caution'); return `<span class="sc ${v}" onclick="openScore(${x.ts})" title="${esc(x.headline || x.error || '')}"><b>${x.error ? '?' : x.score + '/100'}</b>${e.action === 'Sell' ? 'V' : 'A'} ${esc(e.symbol || '')} · ${fmtTime(x.ts)}</span>`; }).join('');
     // Pastille : « en cours » pendant l'analyse, puis pop du résultat (pas au chargement de la page).
+    if (!j.scoreEnabled) {
+      $('aiPill').hidden = true;
+      wasScoring = false;
+      if (sc) lastScoreTs = sc.ts;
+      return;
+    }
     if (j.scoring && !wasScoring) showPill(null, true);
     wasScoring = !!j.scoring;
     if (!sc) return;
@@ -1283,7 +1298,7 @@
       // La notification système est émise par la mini-fenêtre flottante (Electron) ; dans un
       // navigateur classique on garde la notification HTML5.
       const e = sc.entry || {};
-      if (!sc.error) { if (!window.electronPill) notify(`Avis IA ${sc.score} % — ${e.action === 'Sell' ? 'vente' : 'achat'} ${e.symbol || ''}`, sc.headline || ''); beep('ok'); }
+      if (!sc.error) { if (!window.electronPill) notify(`Avis IA ${sc.score}/100 — ${e.action === 'Sell' ? 'vente' : 'achat'} ${e.symbol || ''}`, sc.headline || ''); beep('ok'); }
     }
   }
   $('jrnSyncBtn').onclick = async () => {
@@ -1294,6 +1309,22 @@
       else showToast(`✓ Journal synchronisé · ${d.inserted} ajouté(s) · ${d.updated} mis à jour` + (d.hint ? ` · ${d.hint}` : ''));
     } catch (_) { showToast('Serveur injoignable'); }
     b.disabled = false; refresh();
+  };
+  $('aiScoreToggle').onchange = async (event) => {
+    const toggle = event.currentTarget;
+    const enabled = toggle.checked;
+    toggle.disabled = true;
+    try {
+      const result = await post('/api/ai-score', { enabled });
+      if (!result?.ok || result.enabled !== enabled) throw new Error(result?.error || 'Réglage non enregistré');
+      showToast(enabled ? 'Avis IA activés pour les prochaines entrées' : 'Avis IA désactivés · copie et journal inchangés');
+    } catch (error) {
+      toggle.checked = !enabled;
+      showToast(`Impossible de modifier l’avis IA : ${error.message || error}`);
+    } finally {
+      toggle.disabled = false;
+      refresh();
+    }
   };
   try { if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission(); } catch (_) {}
 

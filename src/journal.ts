@@ -64,16 +64,19 @@ export class JournalLink {
   private lastSync?: SyncState;
   private lastScore?: ScoreResult;
   private scoring = false;
+  private scoreEnabled: boolean;
+  private scoreAbort?: AbortController;
   private history: ScoreResult[] = [];
   private onScore?: (r: ScoreResult) => void;
   private onSync?: (s: SyncState) => void;
 
-  constructor(opts: { key?: string; baseUrl?: string; onScore?: (r: ScoreResult) => void; onSync?: (s: SyncState) => void }) {
+  constructor(opts: { key?: string; baseUrl?: string; scoreEnabled?: boolean; onScore?: (r: ScoreResult) => void; onSync?: (s: SyncState) => void }) {
     this.key = opts.key?.trim() || undefined;
     const verify = process.env.COPIER_VERIFY_URL || "https://let-tradejournal.com/api/copier-verify";
     this.baseUrl = (opts.baseUrl || process.env.COPIER_JOURNAL_URL || new URL(verify).origin).replace(/\/$/, "");
     this.onScore = opts.onScore;
     this.onSync = opts.onSync;
+    this.scoreEnabled = opts.scoreEnabled !== false;
   }
 
   /** Suit le changement de clé fait depuis le panneau. */
@@ -83,6 +86,15 @@ export class JournalLink {
 
   get enabled(): boolean {
     return !!this.key;
+  }
+
+  get isScoreEnabled(): boolean {
+    return this.scoreEnabled;
+  }
+
+  setScoreEnabled(enabled: boolean): void {
+    this.scoreEnabled = enabled;
+    if (!enabled) this.scoreAbort?.abort("disabled");
   }
 
   /** Une position vient de se fermer sur un compte → synchro du journal dans 8 s (regroupe
@@ -135,9 +147,12 @@ export class JournalLink {
 
   /** Avis IA sur une entrée. Ne bloque jamais l'ordre (appelé APRÈS l'envoi). */
   async scoreEntry(req: ScoreRequest): Promise<ScoreResult | null> {
-    if (!this.key) return null;
+    if (!this.key || !this.scoreEnabled) return null;
     if (this.scoring) { log.debug("Journal : avis IA déjà en cours — entrée ignorée"); return null; }
     this.scoring = true;
+    const controller = new AbortController();
+    this.scoreAbort = controller;
+    const timeout = setTimeout(() => controller.abort(), 40_000);
     const started = Date.now();
     try {
       const r = await fetch(`${this.baseUrl}/api/copier-score`, {
@@ -145,9 +160,10 @@ export class JournalLink {
         headers: { "Content-Type": "application/json" },
         // Fuseau de la machine du trader (le journal n'a pas cette info en base).
         body: JSON.stringify({ key: this.key, entry: req, utcOffset: -new Date().getTimezoneOffset() / 60 }),
-        signal: AbortSignal.timeout(40_000),
+        signal: controller.signal,
       });
       const d = (await r.json().catch(() => ({}))) as Record<string, any>;
+      if (controller.signal.aborted || !this.scoreEnabled) return null;
       const res: ScoreResult = r.ok && d.ok
         ? { ts: Date.now(), entry: req, score: d.score, verdict: d.verdict, headline: d.headline, report: d.report, reasons: d.reasons, warning: d.warning, ms: Date.now() - started, context: d.context }
         : { ts: Date.now(), entry: req, error: String(d.error || `HTTP ${r.status}`), ms: Date.now() - started };
@@ -158,12 +174,15 @@ export class JournalLink {
       this.onScore?.(res);
       return res;
     } catch (err) {
+      if (controller.signal.reason === "disabled") return null;
       const res: ScoreResult = { ts: Date.now(), entry: req, error: String((err as Error)?.message || err), ms: Date.now() - started };
       this.lastScore = res;
       log.warn(`Avis IA impossible — ${res.error}`);
       this.onScore?.(res);
       return res;
     } finally {
+      clearTimeout(timeout);
+      if (this.scoreAbort === controller) this.scoreAbort = undefined;
       this.scoring = false;
     }
   }
@@ -171,6 +190,7 @@ export class JournalLink {
   state() {
     return {
       enabled: this.enabled,
+      scoreEnabled: this.scoreEnabled,
       baseUrl: this.baseUrl,
       syncing: this.syncing,
       pendingSync: !!this.syncTimer,

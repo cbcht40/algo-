@@ -530,6 +530,14 @@ export class GroupEngine {
     this.journal = j;
   }
 
+  setAiScoreEnabled(enabled: boolean): boolean {
+    this.cfg.aiScoreEnabled = enabled;
+    this.journal?.setScoreEnabled(enabled);
+    this.persistConfig();
+    log.info(enabled ? "Avis IA activés pour les nouvelles entrées." : "Avis IA désactivés ; les ordres et la synchro du journal restent actifs.");
+    return enabled;
+  }
+
   /** Synchro manuelle du journal (bouton du dashboard). */
   journalSyncNow(force = true) {
     return this.journal ? this.journal.syncNow(force, "manual") : Promise.resolve(null);
@@ -1111,9 +1119,12 @@ export class GroupEngine {
     if (Date.now() - last < SCORE_DEDUPE_MS) return r;
     this.scoredKeys.set(key, Date.now());
     this.rollSession();
+    // Prendre le contexte AVANT d'incrémenter : sessionContext annonce la prochaine
+    // entrée (decisions + 1). Sinon la première recevait le rang 2.
+    const scoreSession = this.sessionContext();
     this.session.decisions++;
     this.session.lastEntryAt = Date.now();
-    this.askScore({ ...req, ts: Date.now(), intent: r.intent, session: this.sessionContext() });
+    this.askScore({ ...req, ts: Date.now(), intent: r.intent, session: scoreSession });
     return r;
   }
 

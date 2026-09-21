@@ -41,7 +41,7 @@ async function main() {
   const gate = new LicenseGate();
   engine.setLicenseGate(gate);
   // Lien avec le journal (synchro immédiate des trades clôturés + avis IA à l'entrée).
-  if (engine instanceof GroupEngine) engine.setJournal(new JournalLink({ key: cfg.license || process.env.COPIER_LICENSE }));
+  if (engine instanceof GroupEngine) engine.setJournal(new JournalLink({ key: cfg.license || process.env.COPIER_LICENSE, scoreEnabled: cfg.aiScoreEnabled }));
 
   const shutdown = async (signal: string) => {
     log.warn(`Received ${signal}, shutting down…`);

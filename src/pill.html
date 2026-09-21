@@ -57,7 +57,7 @@
   // Mini-fenêtre flottante (Electron, toujours au premier plan) : surgit par-dessus Tradovate à
   // chaque avis IA, clic → rapport de la position. Lit l'état du moteur toutes les 2 s.
   const esc = (s) => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-  const VERDICT = { go: 'Favorable', caution: 'Prudence', avoid: 'À éviter' };
+  const VERDICT = { go: 'Aligné', caution: 'À examiner', avoid: 'Écart observé' };
   const fmtTime = (ts) => { const d = new Date(ts), p = n => String(n).padStart(2, '0'); return `${p(d.getHours())}:${p(d.getMinutes())}`; };
   const api = window.electronPill || { show() {}, hide() {}, resize() {}, focusMain() {}, notify() {}, onOpen() {} };
   const PILL_W = 360, PILL_H = 78, REP_W = 560, REP_H = 640;
@@ -80,7 +80,7 @@
     const e = sc.entry || {};
     const v = sc.error ? 'err' : (sc.verdict || 'caution');
     el.className = `pill ${v}`;
-    el.innerHTML = `<div class="ring" style="--p:${sc.error ? 0 : Math.max(4, sc.score)}"><span>${sc.error ? '?' : sc.score}<small>${sc.error ? '' : '%'}</small></span></div>
+    el.innerHTML = `<div class="ring" style="--p:${sc.error ? 0 : Math.max(4, sc.score)}"><span>${sc.error ? '?' : sc.score}<small>${sc.error ? '' : '/100'}</small></span></div>
       <div class="txt"><b>${esc(sc.error ? 'Avis IA indisponible' : (sc.headline || VERDICT[v] || 'Avis IA'))}</b><span>${e.action === 'Sell' ? 'vente' : 'achat'} ${e.qty || ''} ${esc(e.symbol || '')} · clique pour le rapport</span></div>
       <button class="x" title="Masquer">✕</button>`;
     el.hidden = false;
@@ -100,14 +100,14 @@
     const rep = document.getElementById('rep');
     rep.className = `rep show ${v}`;
     rep.innerHTML = `<h3>Rapport de la position</h3>
-      <div class="head"><div class="ring" style="--p:${sc.error ? 0 : Math.max(4, sc.score)}"><span>${sc.error ? '?' : sc.score}<small>${sc.error ? '' : '%'}</small></span></div>
+      <div class="head"><div class="ring" style="--p:${sc.error ? 0 : Math.max(4, sc.score)}"><span>${sc.error ? '?' : sc.score}<small>${sc.error ? '' : '/100'}</small></span></div>
         <div><div class="verdict">${sc.error ? 'indisponible' : (VERDICT[v] || v)}</div><div class="headline">${esc(sc.error ? 'L’avis IA n’a pas pu être calculé.' : (sc.headline || ''))}</div><div class="meta">${meta(sc)}${sc.ms ? ` · ${(sc.ms / 1000).toFixed(1)} s` : ''}</div></div></div>
       <div class="body">
         ${sc.error ? `<div class="report">${esc(sc.error)}</div>` : ''}
         ${sc.report ? `<div class="report">${esc(sc.report)}</div>` : ''}
         ${(sc.reasons || []).length ? `<ul>${sc.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul>` : ''}
         ${sc.warning ? `<div class="warn">${esc(sc.warning)}</div>` : ''}
-        <div class="ctx">Basé sur ${ctx.decisions != null ? ctx.decisions + ' décision(s) de ton journal' : 'ton journal'}${ctx.todayCount != null ? ` · ${ctx.todayCount} trade(s) aujourd’hui (${(ctx.todayPnl || 0) >= 0 ? '+' : ''}${ctx.todayPnl || 0} $)` : ''}${ctx.reports ? ` · ${ctx.reports} analyse(s) IA récentes` : ''}</div>
+        <div class="ctx">Alignement avec ton historique, pas probabilité de gain. Basé sur ${ctx.decisions != null ? ctx.decisions + ' décision(s) de ton journal' : 'ton journal'}${ctx.todayCount != null ? ` · ${ctx.todayCount} trade(s) aujourd’hui (${(ctx.todayPnl || 0) >= 0 ? '+' : ''}${ctx.todayPnl || 0} $)` : ''}${ctx.reports ? ` · ${ctx.reports} analyse(s) IA récentes` : ''}</div>
       </div>
       <div class="acts"><button class="btn" id="openMain">Ouvrir le Copieur</button><button class="btn primary" id="close">Fermer</button></div>`;
     document.getElementById('pill').hidden = true;
@@ -123,7 +123,12 @@
   async function poll() {
     let s;
     try { s = (await (await fetch('/api/state', { cache: 'no-store' })).json()).journal; } catch (err) { console.log('poll KO', String(err)); return; }
-    if (!s || !s.enabled) return;
+    if (!s || !s.enabled || !s.scoreEnabled) {
+      if (s?.lastScore) { lastTs = s.lastScore.ts; last = s.lastScore; }
+      wasScoring = false;
+      hideAll();
+      return;
+    }
     if (s.scoring && !wasScoring && !expanded) showPill(null, true);
     wasScoring = !!s.scoring;
     const sc = s.lastScore;
@@ -134,7 +139,7 @@
       console.log('nouvel avis', sc.score, sc.verdict);
       showPill(sc);
       const e = sc.entry || {};
-      if (!sc.error) api.notify(`Avis IA ${sc.score} % — ${e.action === 'Sell' ? 'vente' : 'achat'} ${e.symbol || ''}`, sc.headline || '');
+      if (!sc.error) api.notify(`Avis IA ${sc.score}/100 — ${e.action === 'Sell' ? 'vente' : 'achat'} ${e.symbol || ''}`, sc.headline || '');
     }
   }
   poll(); setInterval(poll, 2000);

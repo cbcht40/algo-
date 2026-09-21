@@ -142,6 +142,9 @@ export function startDashboard(engine: GroupEngine, port = 7879): void {
           case "/api/relay":
             engine.setRelay(!!p.enabled);
             return json(200, { enabled: engine.isRelayEnabled });
+          case "/api/ai-score":
+            if (typeof p.enabled !== "boolean") return json(400, { ok: false, error: "Choix IA invalide" });
+            return json(200, { ok: true, enabled: engine.setAiScoreEnabled(p.enabled) });
           case "/api/license": {
             const r = await engine.setLicenseKey(String(p.key || ""));
             return json(r.ok ? 200 : 400, r);

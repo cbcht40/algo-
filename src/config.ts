@@ -74,6 +74,8 @@ export interface Config {
   dryRun: boolean;
   /** Edge license key (copy-pasted from Let-Trade Journal). Unlocks trading. */
   license?: string;
+  /** Avis IA après une entrée. Indépendant des ordres et de la synchro du journal. */
+  aiScoreEnabled?: boolean;
   auth: AuthConfig;
   /** Mode sync : le groupe de comptes (source de vérité). */
   accounts: AccountEntry[];
@@ -205,6 +207,7 @@ export function loadConfig(path: string): Config {
     appVersion: c.appVersion ?? "0.1",
     dryRun,
     license: c.license,
+    aiScoreEnabled: c.aiScoreEnabled !== false,
     auth,
     accounts,
     relay: c.relay !== false,
