@@ -23,6 +23,7 @@
     "bundle": "node scripts/bundle.mjs",
     "dist": "npm run bundle && electron-builder --mac --publish never",
     "dist:win": "npm run bundle && electron-builder --win --publish never",
+    "dist:backtest:mac": "swift scripts/generate-backtest-icon.swift && npm run bundle && electron-builder --config scripts/backtest-builder.cjs --mac --publish never",
     "test:backtest": "node --test tools/test-backtest.mjs tools/test-backtest-integration.mjs",
     "app:backtest": "electron electron/main.cjs --backtest-only"
   },
@@ -78,13 +79,6 @@
       "target": "nsis",
       "icon": "icon.png"
     },
-    "protocols": [
-      {
-        "name": "Let-Trade Backtesting",
-        "schemes": [
-          "lettrade"
-        ]
-      }
-    ]
+    "protocols": []
   }
 }

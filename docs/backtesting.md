@@ -1,6 +1,8 @@
 # Backtesting local — protocole v1
 
-Le moteur est indépendant du Copieur et ne possède aucune interface d’ordre réel. Il démarre avec `npm run app:backtest`, le menu Backtesting ou `lettrade://backtest`. Le lancement dédié ne démarre pas Tradovate.
+Le moteur est indépendant du Copieur et ne possède aucune interface d’ordre réel. En développement, il démarre avec `npm run app:backtest`. Le paquet Mac dédié `Let-Trade Backtesting.app` possède son propre nom, son icône, son identifiant et le protocole `lettrade://backtest`. Il démarre directement sur la fenêtre d’appairage, sans ouvrir Tradovate ni le Copieur. La version Copieur conserve son application et ses mises à jour séparées.
+
+Construire le paquet dédié avec `npm run dist:backtest:mac`. La version empaquetée réutilise le dossier `Let Trade Copieur/backtesting` de l’utilisateur afin de retrouver les séances et caches déjà créés, sans ouvrir les données ou identifiants du Copieur. Son canal de mise à jour automatique est désactivé jusqu’à la publication d’un canal propre au Backtesting.
 
 ## Organisation
 

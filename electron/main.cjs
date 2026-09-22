@@ -6,6 +6,7 @@ const { spawn } = require('node:child_process')
 const path = require('node:path')
 const http = require('node:http')
 const fs = require('node:fs')
+const { backtestStandalone = false } = require('../package.json')
 // Auto-update from GitHub Releases (Windows + signed/notarized macOS). Wrapped so a
 // dev run (electron-updater absent) or an unsigned build never crashes.
 let autoUpdater = null
@@ -17,7 +18,7 @@ const DASH_URL = `http://127.0.0.1:${PORT}`
 
 // Pin the app name so the user-data dir is stable + branded (otherwise Electron
 // derives it from the package "name", e.g. "tradovate-copier").
-app.setName('Let Trade Copieur')
+app.setName(backtestStandalone ? 'Let-Trade Backtesting' : 'Let Trade Copieur')
 
 // Packaged: config + caches live in the writable user-data dir (the app bundle is
 // read-only). Dev: they live in the project root.
@@ -38,7 +39,7 @@ let backtestReady = false
 let backtestError = null
 let backtestPower = null
 let backtestTray = null
-let backtestOnly = process.argv.some(a => a === '--backtest-only' || a.startsWith('lettrade://backtest'))
+let backtestOnly = backtestStandalone || process.argv.some(a => a === '--backtest-only' || a.startsWith('lettrade://backtest'))
 const primaryInstance = app.requestSingleInstanceLock()
 if (!primaryInstance) app.quit()
 app.on('second-instance', (_event, argv) => {
@@ -54,7 +55,11 @@ function startBacktest() {
     : path.join(ROOT, 'build/backtest-native', `${process.platform}-${process.arch}`, process.platform === 'win32' ? 'dbn.exe' : 'dbn')
   backtestProcess = spawn(process.execPath, [entry], { cwd: ROOT,
     env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', BACKTEST_PACKAGED: app.isPackaged ? '1' : '',
-      BACKTEST_DATA_DIR: path.join(dataDir(), 'backtesting'), BACKTEST_DECODER: decoder },
+      // The dedicated app has its own macOS identity, but uses the existing
+      // Backtesting store so saved sessions remain available after upgrading.
+      BACKTEST_DATA_DIR: app.isPackaged
+        ? path.join(app.getPath('appData'), 'Let Trade Copieur', 'backtesting')
+        : path.join(dataDir(), 'backtesting'), BACKTEST_DECODER: decoder },
     stdio: ['ignore', 'pipe', 'pipe', 'ipc'] })
   backtestProcess.stdout.on('data', () => {})
   backtestProcess.stderr.on('data', data => { if (data.toString().includes('EADDRINUSE')) backtestError = 'Le port du compagnon est déjà utilisé. Ferme l’autre instance de Let-Trade puis réessaie.' })
@@ -313,7 +318,7 @@ ipcMain.on('pill:notify', (_e, { title, body }) => {
 
 // En dev (`npm run app`), Electron affiche SA propre icône dans le Dock : l'icône « Lentille »
 // n'est appliquée par electron-builder qu'au build empaqueté. On la force ici hors paquet.
-const ICON_PNG = path.join(ROOT, 'icon.png')
+const ICON_PNG = path.join(ROOT, backtestStandalone ? 'assets/backtesting-icon.png' : 'icon.png')
 function applyDevIcon() {
   if (app.isPackaged) return
   try { if (process.platform === 'darwin' && app.dock && fs.existsSync(ICON_PNG)) app.dock.setIcon(ICON_PNG) } catch (_) {}
@@ -343,12 +348,15 @@ async function createWindow() {
 app.whenReady().then(async () => {
   if (!primaryInstance) return
   applyDevIcon()
-  startBacktest()
-  if (app.isPackaged) app.setAsDefaultProtocolClient('lettrade')
-  try {
+  if (backtestOnly) startBacktest()
+  if (app.isPackaged && backtestStandalone) app.setAsDefaultProtocolClient('lettrade')
+  if (backtestOnly) try {
     backtestTray = new Tray(nativeImage.createFromPath(ICON_PNG).resize({ width: 18, height: 18 }))
-    backtestTray.setToolTip('Let-Trade · Copieur et Backtesting')
-    backtestTray.setContextMenu(Menu.buildFromTemplate([
+    backtestTray.setToolTip(backtestStandalone ? 'Let-Trade Backtesting' : 'Let-Trade · Copieur et Backtesting')
+    backtestTray.setContextMenu(Menu.buildFromTemplate(backtestStandalone ? [
+      { label: 'Afficher le Backtesting', click: showBacktest },
+      { type: 'separator' }, { label: 'Quitter Let-Trade Backtesting', click: () => app.quit() },
+    ] : [
       { label: 'Backtesting · connexion au site', click: showBacktest },
       { label: 'Afficher le Copieur', click: async () => { if (win) win.show(); else { if (!(await dashboardUp())) startCopier(); await createWindow(); watchMaster() } } },
       { type: 'separator' }, { label: 'Quitter Let-Trade', click: () => app.quit() },
@@ -364,7 +372,7 @@ app.whenReady().then(async () => {
   // Check for updates (packaged builds only). On télécharge en fond ET on pousse l'état
   // vers le dashboard → bandeau in-app « Mise à jour prête → Installer et redémarrer »
   // (plutôt que la notif système anglaise + install silencieuse au quit).
-  if (app.isPackaged && autoUpdater) {
+  if (app.isPackaged && autoUpdater && !backtestStandalone) {
     autoUpdater.autoDownload = true
     autoUpdater.on('update-available', (info) => sendUpdate({ state: 'available', version: info && info.version }))
     autoUpdater.on('download-progress', (p) => sendUpdate({ state: 'downloading', percent: Math.round((p && p.percent) || 0), version: lastUpdateStatus.version }))
@@ -376,8 +384,14 @@ app.whenReady().then(async () => {
     })
     autoUpdater.checkForUpdates().catch((err) => console.warn('[update]', err?.message || err))
   }
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) showBacktest()
+  app.on('activate', async () => {
+    if (BrowserWindow.getAllWindows().length !== 0) return
+    if (backtestOnly) showBacktest()
+    else {
+      if (!(await dashboardUp())) startCopier()
+      await createWindow()
+      watchMaster()
+    }
   })
 })
 
